@@ -57,30 +57,31 @@ clientMain hostname =
   do h <- connectTo hostname gamePort
      hSetBuffering h NoBuffering
      SetWorld poss <- readIO =<< hGetLine h
-     w <- initClientWorld poss
-     _ <- forkIO $ clientUpdates h w
-     runGame w
+     r <- newIORef =<< initClientWorld poss
+     _ <- forkIO $ clientUpdates h r
+     runGame r
 
 --- XXX: This is wrong because we keep using the NPC positions
 -- of the initial world.
-clientUpdates :: Handle -> World -> IO ()
-clientUpdates h w = forever $
+clientUpdates :: Handle -> IORef World -> IO ()
+clientUpdates h r = forever $
   do ServerCommand name cmd <- readIO =<< hGetLine h
-     putStrLn ("Got command: " ++ show name ++ " " ++ show cmd)
+     w <- readIORef r
      let npc = worldNpcs w !! name
      case cmd of
        Move pos -> walkingNPC npc pos
        Stop     -> waitingNPC npc Nothing False
        Stun     -> waitingNPC npc Nothing True
 
-runGame :: World -> IO ()
-runGame w =
+runGame :: IORef World -> IO ()
+runGame r =
+     readIORef r >>= \w ->
      playIO
        (InWindow "test" (round width, round height) (10,10)) black eventsPerSecond
        w
        drawWorld
        inputEvent
-       updateClientWorld
+       (updateClientWorld r)
   where (width,height) = subPt boardMax boardMin
 
 runServer hs w =
@@ -250,10 +251,12 @@ inputEvent _                       w = return w
 
 sendClientCommand cmd = error "sendClientCommand"
 
-updateClientWorld    :: Float -> World -> IO World
-updateClientWorld t w =
+updateClientWorld :: IORef World -> Float -> World -> IO World
+updateClientWorld r t w =
   do npcs' <- mapM (updateNPC [] t False) $ worldNpcs w
-     return w { worldNpcs = npcs' }
+     let w1 = w { worldNpcs = npcs' }
+     writeIORef r w1
+     return w1
 
 updateServerWorld    :: [Handle] -> Float -> ServerWorld -> IO ServerWorld
 updateServerWorld hs t w =
