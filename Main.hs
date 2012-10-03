@@ -6,7 +6,9 @@ import System.Random
 import Control.Monad
 import Control.Concurrent
 import System.IO
+import System.Environment
 import Data.IORef
+import Control.Concurrent.MVar
 import Network
 
 gamePort = PortNumber 16000
@@ -39,9 +41,13 @@ eventsPerSecond = 100
 
 main :: IO ()
 main =
-  do serverMain 1
-     putStrLn "Starting client"
-     clientMain "localhost"
+  do args <- getArgs
+     case args of
+       ["server",n]        -> serverMain (read n)
+       ["client"]          -> clientMain "localhost"
+       ["client",hostname] -> clientMain hostname
+       _ -> do putStrLn "Server usage: Main server NUM_CLIENTS"
+               putStrLn "Client usage: Main client [HOSTNAME]"
 
 serverMain :: Int -> IO ()
 serverMain n = do
@@ -50,12 +56,29 @@ serverMain n = do
     conns <- replicateM n (accept listenH)
     let hs = [h | (h,_,_) <- conns]
     w  <- initServerWorld n
+    var <- newMVar w
     let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
-    mapM_ (`hSetBuffering` NoBuffering) hs
-    mapM_ (\h -> hPrint h setCommand) hs
-    -- XXX: listen for client events
-    runServer hs w
+    forM_ (zip [0..] hs) $ \(i,h) ->
+      do hSetBuffering h NoBuffering
+         hPrint h setCommand
+         forkIO $ clientSocketLoop i hs var
+    var <- newMVar w
+    runServer hs var
+  _ <- getLine
   return ()
+
+clientSocketLoop :: Int -> [Handle] -> MVar ServerWorld -> IO ()
+clientSocketLoop i hs ref = forever $
+  do let h = hs !! i
+     cmd <- readIO =<< hGetLine h
+     putStrLn $ "Client command: " ++ show cmd
+     withMVar ref $ \w ->
+       do let p = serverPlayers w !! i
+          announce (ServerCommand i cmd) hs
+          case cmd of
+            Move pos -> walkingNPC (playerNpc p) pos
+            Stop     -> waitingNPC (playerNpc p) Nothing False
+            _        -> return ()
 
 
 clientMain hostname =
@@ -64,7 +87,7 @@ clientMain hostname =
      SetWorld poss <- readIO =<< hGetLine h
      r <- newIORef =<< initClientWorld poss
      _ <- forkIO $ clientUpdates h r
-     runGame r
+     runGame h r
 
 clientUpdates :: Handle -> IORef World -> IO ()
 clientUpdates h r = forever $
@@ -76,29 +99,28 @@ clientUpdates h r = forever $
        Stop     -> waitingNPC npc Nothing False
        Stun     -> waitingNPC npc Nothing True
 
-runGame :: IORef World -> IO ()
-runGame r =
+runGame :: Handle -> IORef World -> IO ()
+runGame h r =
      readIORef r >>= \w ->
      playIO
        (InWindow "test" (round width, round height) (10,10)) black eventsPerSecond
        w
        drawWorld
-       inputEvent
+       (inputEvent h)
        (updateClientWorld r)
   where (width,height) = subPt boardMax boardMin
 
-runServer hs w =
+runServer hs mvar = forever $
   do threadDelay (1000000 `div` eventsPerSecond)
-     w' <- updateServerWorld hs (recip $ fromIntegral eventsPerSecond) w
-     runServer hs w'
+     modifyMVar_ mvar $ updateServerWorld hs period
+     
+  where
+  period = recip $ fromIntegral eventsPerSecond
 
 data ServerWorld = ServerWorld
   { serverNpcs    :: [NPC]
   , serverPlayers :: [Player]
   }
-
-announceWorld :: World -> IO ()
-announceWorld w = print () -- XXX
 
 addPt :: Point -> Point -> Point
 addPt (x,y) (a,b) = (x+a,y+b)
@@ -255,15 +277,15 @@ to a race condition. -}
          Just ChooseDestination ->
             do tgt <- randomBoardPoint
                walkingNPC npc' tgt
-               mapM_ (announce (ServerCommand (npcName npc') (Move tgt))) hs
+               announce (ServerCommand (npcName npc') (Move tgt)) hs
 
          Nothing -> return ()
 
      return npc'
 
-announce msg h =
+announce msg hs =
   do print msg
-     hPrint h msg
+     mapM_ (`hPrint` msg) hs
 
 initClientWorld :: [Point] -> IO World
 initClientWorld poss =
@@ -279,13 +301,11 @@ initServerWorld playerCount =
 drawWorld      :: World -> IO Picture
 drawWorld w     = fmap pictures $ mapM drawNPC $ worldNpcs w
 
-inputEvent     :: Event -> World -> IO World
-inputEvent (EventKey k Down _ pos) w
-  | k == moveButton  = sendClientCommand (Move pos)
-  | k == stopButton  = sendClientCommand Stop
-inputEvent _                       w = return w
-
-sendClientCommand cmd = error "sendClientCommand"
+inputEvent     :: Handle -> Event -> World -> IO World
+inputEvent h (EventKey k Down _ pos) w
+  | k == moveButton  = hPrint h (Move pos) >> return w
+  | k == stopButton  = hPrint h Stop >> return w
+inputEvent _ _                       w = return w
 
 updateClientWorld :: IORef World -> Float -> World -> IO World
 updateClientWorld r t w =
