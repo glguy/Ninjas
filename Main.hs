@@ -35,22 +35,23 @@ eventsPerSecond = 100
 
 main :: IO ()
 main =
-  do forkIO $ serverMain 1
-     threadDelay 1000000
+  do serverMain 1
      putStrLn "Starting client"
      clientMain "localhost"
 
 serverMain :: Int -> IO ()
 serverMain n = do
   listenH <- listenOn gamePort
-  conns <- replicateM n (accept listenH)
-  let hs = [h | (h,_,_) <- conns]
-  w  <- initServerWorld n
-  let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
-  mapM_ (`hSetBuffering` NoBuffering) hs
-  mapM_ (\h -> hPrint h setCommand) hs
-  -- XXX: listen for client events
-  runServer hs w
+  forkIO $ do
+    conns <- replicateM n (accept listenH)
+    let hs = [h | (h,_,_) <- conns]
+    w  <- initServerWorld n
+    let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
+    mapM_ (`hSetBuffering` NoBuffering) hs
+    mapM_ (\h -> hPrint h setCommand) hs
+    -- XXX: listen for client events
+    runServer hs w
+  return ()
 
 
 clientMain hostname =
