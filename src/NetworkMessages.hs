@@ -19,7 +19,7 @@ data Command
   
 data ServerCommand
   = ServerCommand Int Command
-  | SetWorld [Point]
+  | SetWorld [(Point,Vector)]
   | ServerWaiting Int
   deriving (Show, Read)
 

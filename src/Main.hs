@@ -29,6 +29,9 @@ speed = 1
 restTime :: Float
 restTime = 2
 
+ninjaRadius :: Float
+ninjaRadius = 10
+
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 attackButton = Char 'a'
@@ -62,13 +65,17 @@ serverMain n = do
     sClose sock
     w   <- initServerWorld n
     var <- newMVar w
-    let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
+    let setCommand = generateSetWorld w
     forM_ (zip [0..] hs) $ \(i,h) ->
       do hPutServerCommand h setCommand
          forkIO $ clientSocketLoop i hs h var
     runServer hs var
   _ <- getLine
   return ()
+
+generateSetWorld w = SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w]
+
+allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
 
 extract 0 (x:xs) = (x,xs)
 extract i (x:xs) =
@@ -122,7 +129,7 @@ getConnections s = aux []
        putStrLn $ "Got connection from " ++ host ++ ":" ++ show port
        aux (h:hs) (i-1)
 
-getInitialWorld :: Handle -> IO [Point]
+getInitialWorld :: Handle -> IO [(Point,Vector)]
 getInitialWorld h =
   do msg <- hGetServerCommand h
      case msg of
@@ -175,7 +182,12 @@ scalePt s (x,y) = (s * x, s * y)
 
 
 
-data NPC      = NPC { npcName :: Int, npcPos :: Point, npcState :: State }
+data NPC      = NPC
+  { npcName   :: Int
+  , npcPos    :: Point
+  , npcFacing :: Vector -- Unit vector
+  , npcState  :: State
+  }
 
 data Player   = Player { playerNpc :: NPC }
 
@@ -210,11 +222,15 @@ insertPlayer p (x:xs)
   | otherwise = x : insertPlayer p xs
 
 walkingNPC :: NPC -> Point -> NPC
-walkingNPC npc npcTarget = npc { npcState = state }
+walkingNPC npc npcTarget = npc { npcState = state
+                               , npcFacing = facing }
   where
   state       = Walking Walk { .. }
-  npcVelocity | npcDist > 0.001 = scalePt (speed / npcDist) path
-              | otherwise       = (0,0)
+
+  facing      | npcDist > 0.001 = scalePt (1 / npcDist) path
+              | otherwise       = npcFacing npc
+
+  npcVelocity = scalePt speed facing
 
   path        = subPt npcTarget (npcPos npc)
   npcDist     = len path
@@ -267,14 +283,21 @@ randomPoint (minX,minY) (maxX,maxY) =
 randomBoardPoint :: IO Point
 randomBoardPoint = randomPoint boardMin boardMax
 
-initClientNPC :: Int -> Point -> NPC
-initClientNPC npcName npcPos =
+randomUnitVector :: IO Vector
+randomUnitVector =
+  do degrees <- randomRIO (0,359) :: IO Int
+     let rads = pi * fromIntegral degrees / 180 :: Float
+     return (cos rads, sin rads)
+
+initClientNPC :: Int -> (Point, Vector) -> NPC
+initClientNPC npcName (npcPos, npcFacing) =
   let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
   in  NPC { .. }
 
 initServerNPC :: Bool -> Int -> IO NPC
 initServerNPC think npcName =
   do npcPos     <- randomBoardPoint
+     npcFacing  <- randomUnitVector
      npcWaiting <- pickWaitTime think
      let npcStunned = False
          npcState = Waiting Wait { .. }
@@ -288,7 +311,6 @@ initPlayer name =
 pickWaitTime :: Bool -> IO (Maybe Float)
 pickWaitTime False = return Nothing
 pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
-
 
 data ThinkTask = ChooseWait | ChooseDestination
 
@@ -345,7 +367,7 @@ updateNPC hs t think npc =
 announce msg hs =
   do mapM_ (`hPutServerCommand` msg) hs
 
-initClientWorld :: [Point] -> World
+initClientWorld :: [(Point, Vector)] -> World
 initClientWorld poss =
   World { worldNpcs = zipWith initClientNPC [0..] poss }
 
@@ -386,14 +408,11 @@ drawNPC :: NPC -> Picture
 drawNPC npc =
   let state = npcState npc
   in  translate x y $ color (c state)
-            $ pictures [ line [(0,0),end state]
-                       , circle 10
+            $ pictures [ line [(0,0),scalePt ninjaRadius $ npcFacing npc]
+                       , circle ninjaRadius
                        , color white (circle attackRadius) ]
- 
-
-  where (x,y) = npcPos npc
-        end (Walking w) = npcVelocity w * 10
-        end _           = (0,0)
+  where
+        (x,y) = npcPos npc
 
         c   Dead                       = red
         c   (Waiting w) | npcStunned w = yellow
