@@ -26,7 +26,7 @@ restTime = 2
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 
-npcCount = 1
+npcCount = 25
 
 
 eventsPerSecond = 100
@@ -61,8 +61,6 @@ clientMain hostname =
      _ <- forkIO $ clientUpdates h r
      runGame r
 
---- XXX: This is wrong because we keep using the NPC positions
--- of the initial world.
 clientUpdates :: Handle -> IORef World -> IO ()
 clientUpdates h r = forever $
   do ServerCommand name cmd <- readIO =<< hGetLine h
