@@ -1,16 +1,17 @@
 {-# LANGUAGE RecordWildCards #-}
 
+import Control.Concurrent
+import Control.Concurrent.MVar
+import Control.Monad
+import Data.IORef
+import Data.Maybe
+import Debug.Trace
 import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
-import System.Random
-import Control.Monad
-import Control.Concurrent
-import System.IO
-import System.Environment
-import Data.IORef
-import Control.Concurrent.MVar
 import Network
-import Debug.Trace
+import System.Environment
+import System.IO
+import System.Random
 
 import NetworkMessages
 
@@ -69,27 +70,36 @@ serverMain n = do
   _ <- getLine
   return ()
 
+extract 0 (x:xs) = (x,xs)
+extract i (x:xs) =
+  let (y,ys) = extract (i-1) xs
+  in (y, x:ys)
+
 clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h ref = forever $
+clientSocketLoop i hs h var = forever $
   do cmd <- hGetCommand h
      putStrLn $ "Client command: " ++ show cmd
-     withMVar ref $ \w ->
-       do let players = map playerNpc (serverPlayers w)
-              me      = players !! i
-              notMe p = npcName p /= npcName me
+     msgs <- modifyMVar var $ \w ->
+       do let players = serverPlayers w
+              (me,them) = extract i players
+              updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
 
           -- XXX: These should work only if the player is not dead!
-          msgs <- case cmd of
-            Move pos -> do walkingNPC me pos
-                           return [ServerCommand i cmd]
-            Stop     -> do waitingNPC me Nothing False
-                           return [ServerCommand i cmd]
-            Attack   -> do performAttack me
-                             (filter notMe players)
-                             (serverNpcs w)
-            _        -> do return []
-          forM_ msgs $ \msg -> announce msg hs
-
+          return $ case cmd of
+            Move pos -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
+                        , [ServerCommand i cmd]
+                        )
+            Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
+                        , [ServerCommand i cmd]
+                        )
+            Attack   -> let (me', them', npcs', cmds) = performAttack me them (serverNpcs w)
+                        in  (w { serverPlayers = insertPlayer me' them'
+                               , serverNpcs    = npcs'
+                               }
+                            , cmds
+                            )
+            _        -> (w,[])
+     forM_ msgs $ \msg -> announce msg hs
 
 clientMain :: HostName -> IO ()
 clientMain hostname =
@@ -97,7 +107,7 @@ clientMain hostname =
      hSetBuffering h LineBuffering
 
      poss <- getInitialWorld h
-     r <- newIORef =<< initClientWorld poss
+     r <- newMVar (initClientWorld poss)
      _ <- forkIO $ clientUpdates h r
      runGame h r
 
@@ -122,40 +132,34 @@ getInitialWorld h =
             getInitialWorld h
        _ -> fail "Unexpected initial message"
 
-clientUpdates :: Handle -> IORef World -> IO ()
-clientUpdates h r = forever $
+clientUpdates :: Handle -> MVar World -> IO ()
+clientUpdates h var = forever $
   do ServerCommand name cmd <- hGetServerCommand h
-     w <- readIORef r
-     let npc = worldNpcs w !! name
-     case cmd of
-       Move pos -> walkingNPC npc pos
-       Stop     -> waitingNPC npc Nothing False
-       Stun     -> stunnedNPC npc
-       Die      -> deadNPC npc
-       Attack   -> return ()
+     modifyMVar_ var $ \w ->
+       return $ w { worldNpcs = updateList name (npcCommand cmd) $ worldNpcs w }
+  where
+  npcCommand cmd npc = case cmd of
+    Move pos -> walkingNPC npc pos
+    Stop     -> waitingNPC npc Nothing False
+    Stun     -> stunnedNPC npc
+    Die      -> deadNPC npc
+    Attack   -> npc -- XXX need to set attack state
 
-runGame :: Handle -> IORef World -> IO ()
-runGame h r =
-     readIORef r >>= \w ->
+runGame :: Handle -> MVar World -> IO ()
+runGame h var =
      playIO
        (InWindow "test" (round width, round height) (10,10)) black eventsPerSecond
-       w
-       drawWorld
+       ()
+       (\() -> fmap drawWorld (readMVar var))
        (inputEvent h)
-       (updateClientWorld r)
+       (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
   where (width,height) = subPt boardMax boardMin
 
-runServer hs mvar = forever $
+runServer :: [Handle] -> MVar ServerWorld -> IO a
+runServer hs w = forever $
   do threadDelay (1000000 `div` eventsPerSecond)
-     modifyMVar_ mvar $ updateServerWorld hs period
-     
-  where
-  period = recip $ fromIntegral eventsPerSecond
-
-data ServerWorld = ServerWorld
-  { serverNpcs    :: [NPC]
-  , serverPlayers :: [Player]
-  }
+     let period = recip $ fromIntegral eventsPerSecond
+     modifyMVar_ w $ updateServerWorld hs period
 
 addPt :: Point -> Point -> Point
 addPt (x,y) (a,b) = (x+a,y+b)
@@ -170,7 +174,8 @@ scalePt :: Float -> Point -> Point
 scalePt s (x,y) = (s * x, s * y)
 
 
-data NPC      = NPC { npcName :: Int, npcPos :: Point, npcState :: IORef State }
+
+data NPC      = NPC { npcName :: Int, npcPos :: Point, npcState :: State }
 
 data Player   = Player { playerNpc :: NPC }
 
@@ -191,8 +196,21 @@ data World = World
   { worldNpcs        :: [NPC]
   }
 
-walkingNPC :: NPC -> Point -> IO ()
-walkingNPC npc npcTarget = writeIORef (npcState npc) state
+data ServerWorld = ServerWorld
+  { serverNpcs    :: [NPC]
+  , serverPlayers :: [Player]
+  }
+
+mapPlayerNpc f p = p { playerNpc = f (playerNpc p) }
+
+insertPlayer :: Player -> [Player] -> [Player]
+insertPlayer p [] = [p]
+insertPlayer p (x:xs)
+  | npcName (playerNpc p) < npcName (playerNpc x) = p : x : xs
+  | otherwise = x : insertPlayer p xs
+
+walkingNPC :: NPC -> Point -> NPC
+walkingNPC npc npcTarget = npc { npcState = state }
   where
   state       = Walking Walk { .. }
   npcVelocity | npcDist > 0.001 = scalePt (speed / npcDist) path
@@ -201,33 +219,43 @@ walkingNPC npc npcTarget = writeIORef (npcState npc) state
   path        = subPt npcTarget (npcPos npc)
   npcDist     = len path
 
-waitingNPC :: NPC -> Maybe Float -> Bool -> IO ()
-waitingNPC npc npcWaiting npcStunned = writeIORef (npcState npc) state
+waitingNPC :: NPC -> Maybe Float -> Bool -> NPC
+waitingNPC npc npcWaiting npcStunned = npc { npcState = state }
   where
   state = Waiting Wait { .. }
 
-deadNPC :: NPC -> IO ()
-deadNPC npc = writeIORef (npcState npc) Dead
+deadNPC :: NPC -> NPC
+deadNPC npc = npc { npcState = Dead }
 
-stunnedNPC :: NPC -> IO ()
+stunnedNPC :: NPC -> NPC
 stunnedNPC npc = waitingNPC npc (Just stunTime) True
 
 
-performAttack :: NPC -> [NPC] -> [NPC] -> IO [ServerCommand]
+performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [ServerCommand])
 performAttack attacker players npcs =
-  do putStrLn "Performing attack!"
-     as <- mapM kill (affected players)
-     bs <- mapM stun (affected npcs)
-     return (as ++ bs)
+  (attacker , players' , npcs' , attackCmd : catMaybes (commands1 ++ commands2))
   where
-  distance someone = let x =  len (subPt (npcPos someone) (npcPos attacker))
+  attackCmd = ServerCommand (npcName (playerNpc attacker)) Attack
+
+  (players', commands1) = unzip $ map checkKill players
+  (npcs'   , commands2) = unzip $ map checkStun npcs
+
+  distance someone = let x =  len (subPt (npcPos someone) (npcPos (playerNpc attacker)))
                      in trace ("distance = " ++ show x) x
-  affected         = filter ((<= attackRadius) . distance)
-  kill player      = do deadNPC player
-                        return (ServerCommand (npcName player) Die)
-  stun npc         = do putStrLn "stunned!"
-                        stunnedNPC npc
-                        return (ServerCommand (npcName npc) Stun)
+  affected npc     = distance npc <= attackRadius -- XXX fancy cone math
+  checkKill player
+    | affected npc = ( player { playerNpc = deadNPC npc }
+                     , Just (ServerCommand (npcName npc) Die)
+                     )
+    | otherwise    = ( player, Nothing )
+    where
+    npc = playerNpc player
+
+  checkStun npc
+    | affected npc = ( stunnedNPC npc
+                     , Just (ServerCommand (npcName npc) Stun)
+                     )
+    | otherwise    = ( npc, Nothing )
 
 
 randomPoint :: Point -> Point -> IO Point
@@ -239,17 +267,17 @@ randomPoint (minX,minY) (maxX,maxY) =
 randomBoardPoint :: IO Point
 randomBoardPoint = randomPoint boardMin boardMax
 
-initClientNPC :: Int -> Point -> IO NPC
+initClientNPC :: Int -> Point -> NPC
 initClientNPC npcName npcPos =
-  do npcState <- newIORef (Waiting Wait { npcWaiting = Nothing, npcStunned = False })
-     return NPC { .. }
+  let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
+  in  NPC { .. }
 
 initServerNPC :: Bool -> Int -> IO NPC
 initServerNPC think npcName =
-  do npcPos   <- randomBoardPoint
+  do npcPos     <- randomBoardPoint
      npcWaiting <- pickWaitTime think
      let npcStunned = False
-     npcState <- newIORef (Waiting Wait { .. })
+         npcState = Waiting Wait { .. }
      return NPC { .. }
 
 initPlayer :: Int -> IO Player
@@ -270,8 +298,8 @@ with external threads that try to modify the state (e.g., user input
 or commands from the server).  In addition to returning an updated NPC,
 we also return a kind of "continutaion" telling us what needs to be
 done next for computer controlled characters. -}
-updateNPC' :: Float -> NPC -> IO (NPC, Maybe ThinkTask)
-updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
+updateNPC' :: Float -> NPC -> (NPC, Maybe ThinkTask)
+updateNPC' elapsed npc =
   case state of
     Walking w
       | npcDist w < speed -> done ChooseWait
@@ -288,69 +316,55 @@ updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
 
     Dead -> working state npc
 
-  where done next = ( Waiting Wait { npcWaiting = Nothing, npcStunned = False }
-                    , (npc, Just next)
-                    )
-        working s n = (s,(n,Nothing))
+  where state = npcState npc
+
+        done next = (npc { npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False } }
+                    , Just next)
+
+        working s n = (n { npcState = s}, Nothing)
 
 
 
 updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
-  do (npc',mbTask) <- updateNPC' t npc
+  do let (npc',mbTask) = updateNPC' t npc
 
-{- Note that if we need to think, then we are a computer contorolled
-NPC and so ther should be no external threads---such as user input,
-or instructions from the server---that can modify the state.
-This is why updating the state in the code bellow does not lead
-to a race condition. -}
+     case guard think >> mbTask of
 
-     when think $
-       case mbTask of
+       Just ChooseWait ->
+         do time <- pickWaitTime True
+            return $ waitingNPC npc' time False
 
-         Just ChooseWait ->
-           do time <- pickWaitTime True
-              waitingNPC npc' time False
+       Just ChooseDestination ->
+         do tgt <- randomBoardPoint
+            announce (ServerCommand (npcName npc') (Move tgt)) hs
+            return $ walkingNPC npc' tgt
 
-         Just ChooseDestination ->
-            do tgt <- randomBoardPoint
-               walkingNPC npc' tgt
-               announce (ServerCommand (npcName npc') (Move tgt)) hs
-
-         Nothing -> return ()
-
-     return npc'
+       Nothing -> return npc'
 
 announce msg hs =
   do mapM_ (`hPutServerCommand` msg) hs
 
-initClientWorld :: [Point] -> IO World
+initClientWorld :: [Point] -> World
 initClientWorld poss =
-  do npcs <- zipWithM initClientNPC [0..] poss
-     return World { worldNpcs = npcs }
+  World { worldNpcs = zipWith initClientNPC [0..] poss }
 
 initServerWorld :: Int -> IO ServerWorld
 initServerWorld playerCount =
-  do serverPlayers <- mapM initPlayer [0 .. playerCount - 1]
+  do serverPlayers <- mapM (initPlayer        ) [0 .. playerCount - 1]
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
      return ServerWorld { .. }
 
-drawWorld      :: World -> IO Picture
-drawWorld w     = fmap pictures $ mapM drawNPC $ worldNpcs w
+inputEvent     :: Handle -> Event -> () -> IO ()
+inputEvent h (EventKey k Down _ pos) ()
+  | k == moveButton   = hPutCommand h (Move pos)
+  | k == stopButton   = hPutCommand h Stop
+  | k == attackButton = hPutCommand h Attack
+inputEvent _ _ () = return ()
 
-inputEvent     :: Handle -> Event -> World -> IO World
-inputEvent h (EventKey k Down _ pos) w
-  | k == moveButton   = hPutCommand h (Move pos) >> return w
-  | k == stopButton   = hPutCommand h Stop       >> return w
-  | k == attackButton = hPutCommand h Attack     >> return w
-inputEvent _ _ w = return w
-
-updateClientWorld :: IORef World -> Float -> World -> IO World
-updateClientWorld r t w =
-  do npcs' <- mapM (updateNPC [] t False) $ worldNpcs w
-     let w1 = w { worldNpcs = npcs' }
-     writeIORef r w1
-     return w1
+updateClientWorld :: Float -> World -> World
+updateClientWorld t w =
+  w { worldNpcs = map (fst . updateNPC' t) $ worldNpcs w }
 
 updateServerWorld    :: [Handle] -> Float -> ServerWorld -> IO ServerWorld
 updateServerWorld hs t w =
@@ -365,10 +379,13 @@ updatePlayer hs t p =
   do npc' <- updateNPC hs t False $ playerNpc p
      return p { playerNpc = npc' }
 
-drawNPC :: NPC -> IO Picture
+drawWorld      :: World -> Picture
+drawWorld       = pictures . map drawNPC . worldNpcs
+
+drawNPC :: NPC -> Picture
 drawNPC npc =
-  do state <- readIORef (npcState npc)
-     return $ translate x y $ color (c state)
+  let state = npcState npc
+  in  translate x y $ color (c state)
             $ pictures [ line [(0,0),end state]
                        , circle 10
                        , color white (circle attackRadius) ]
@@ -381,3 +398,6 @@ drawNPC npc =
         c   Dead                       = red
         c   (Waiting w) | npcStunned w = yellow
         c   _                          = green
+
+updateList 0 f (x:xs) = f x : xs
+updateList i f (x:xs) = x : updateList (i-1) f xs
