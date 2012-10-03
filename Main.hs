@@ -4,8 +4,12 @@ import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
 import System.Random
 import Control.Monad
+import Control.Concurrent
+import System.IO
 import Data.IORef
+import Network
 
+gamePort = PortNumber 16000
 
 boardMin :: Point
 boardMin = (-250,-250)
@@ -22,18 +26,69 @@ restTime = 2
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 
+npcCount = 1
+
 main :: IO ()
 main =
-  do i <- initWorld
+  do forkIO $ serverMain 1
+     threadDelay 1000000
+     putStrLn "Starting client"
+     clientMain "localhost"
+
+serverMain :: Int -> IO ()
+serverMain n = do
+  listenH <- listenOn gamePort
+  conns <- replicateM n (accept listenH)
+  let hs = [h | (h,_,_) <- conns]
+  w  <- initServerWorld n
+  let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
+  mapM_ (`hSetBuffering` NoBuffering) hs
+  mapM_ (\h -> hPrint h setCommand) hs
+  -- XXX: listen for client events
+  runServer hs w
+
+eventsPerSecond = 100
+
+clientMain hostname =
+  do h <- connectTo hostname gamePort
+     hSetBuffering h NoBuffering
+     SetWorld poss <- readIO =<< hGetLine h
+     w <- initClientWorld poss
+     _ <- forkIO $ clientUpdates h w
+     runGame w
+
+clientUpdates :: Handle -> World -> IO ()
+clientUpdates h w = forever $
+  do ServerCommand name cmd <- readIO =<< hGetLine h
+     putStrLn ("Got command: " ++ show name ++ " " ++ show cmd)
+     let npc = worldNpcs w !! name
+     case cmd of
+       Move pos -> walkingNPC npc pos
+       Stop     -> waitingNPC npc Nothing False
+       Stun     -> waitingNPC npc Nothing True
+
+runGame :: World -> IO ()
+runGame w =
      playIO
-       (InWindow "test" (round width, round height) (10,10)) black 100
-       i
+       (InWindow "test" (round width, round height) (10,10)) black eventsPerSecond
+       w
        drawWorld
        inputEvent
-       updateWorld
-
+       updateClientWorld
   where (width,height) = subPt boardMax boardMin
 
+runServer hs w =
+  do threadDelay (1000000 `div` eventsPerSecond)
+     w' <- updateServerWorld hs (recip $ fromIntegral eventsPerSecond) w
+     runServer hs w'
+
+data ServerWorld = ServerWorld
+  { serverNpcs    :: [NPC]
+  , serverPlayers :: [Player]
+  }
+
+announceWorld :: World -> IO ()
+announceWorld w = print () -- XXX
 
 addPt :: Point -> Point -> Point
 addPt (x,y) (a,b) = (x+a,y+b)
@@ -66,9 +121,7 @@ data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
   deriving (Show)
 
 data World = World
-  { worldNpcs :: [NPC]
-  , worldPlayer :: Player
-  , worldNpcChange :: NPC -> IO ()
+  { worldNpcs        :: [NPC]
   }
 
 walkingNPC :: NPC -> Point -> IO ()
@@ -96,24 +149,30 @@ randomPoint (minX,minY) (maxX,maxY) =
 randomBoardPoint :: IO Point
 randomBoardPoint = randomPoint boardMin boardMax
 
-initNPC :: Bool -> Int -> IO NPC
-initNPC think npcName =
+initClientNPC :: Int -> Point -> IO NPC
+initClientNPC npcName npcPos =
+  do npcState <- newIORef (Waiting Wait { npcWaiting = Nothing, npcStunned = False })
+     return NPC { .. }
+
+initServerNPC :: Bool -> Int -> IO NPC
+initServerNPC think npcName =
   do npcPos   <- randomBoardPoint
-     waitTime <- pickWaitTime think
-     npcState <- newIORef (Waiting Wait { npcWaiting = waitTime, npcStunned = False })
+     npcWaiting <- pickWaitTime think
+     let npcStunned = False
+     npcState <- newIORef (Waiting Wait { .. })
      return NPC { .. }
 
 initPlayer :: Int -> IO Player
 initPlayer name =
-  do pnpc <- initNPC False name
-     return Player { playerNpc = pnpc }
+  do playerNpc <- initServerNPC False name
+     return Player { .. }
 
 pickWaitTime :: Bool -> IO (Maybe Float)
 pickWaitTime False = return Nothing
 pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
 
-updateNPC :: Float -> Bool -> NPC -> IO NPC
-updateNPC t think npc = readIORef (npcState npc) >>= \state ->
+updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
+updateNPC hs t think npc = readIORef (npcState npc) >>= \state ->
   case state of
     Walking w
       | npcDist w < speed ->
@@ -131,7 +190,7 @@ updateNPC t think npc = readIORef (npcState npc) >>= \state ->
           | todo < t  ->
               do tgt <- randomBoardPoint
                  walkingNPC npc tgt
-                 announce npc
+                 mapM_ (announce (ServerCommand (npcName npc) (Move tgt))) hs
                  return npc
 
           | otherwise ->
@@ -140,47 +199,49 @@ updateNPC t think npc = readIORef (npcState npc) >>= \state ->
 
     Dead -> return npc
 
+announce msg h =
+  do print msg
+     hPrint h msg
 
+initClientWorld :: [Point] -> IO World
+initClientWorld poss =
+  do npcs <- zipWithM initClientNPC [0..] poss
+     return World { worldNpcs = npcs }
 
-initWorld      :: IO World
-initWorld       = do p    <- initPlayer 0
-                     npcs <- mapM (initNPC True) [1..25]
-                     return World { worldPlayer    = p
-                                  , worldNpcChange = announce
-                                  , worldNpcs      = npcs }
-
-announce :: NPC -> IO ()
-announce npc =
-  do state <- readIORef (npcState npc)
-     print (npcName npc, state)
+initServerWorld :: Int -> IO ServerWorld
+initServerWorld playerCount =
+  do serverPlayers <- mapM initPlayer [0 .. playerCount - 1]
+     serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
+     return ServerWorld { .. }
 
 drawWorld      :: World -> IO Picture
-drawWorld w     = fmap pictures $ mapM drawNPC $ playerNpc (worldPlayer w) : worldNpcs w
+drawWorld w     = fmap pictures $ mapM drawNPC $ worldNpcs w
 
 inputEvent     :: Event -> World -> IO World
 inputEvent (EventKey k Down _ pos) w
-  | k == moveButton  = movePlayer 0 pos w
-  | k == stopButton  = stopPlayer 0 w
+  | k == moveButton  = sendClientCommand (Move pos)
+  | k == stopButton  = sendClientCommand Stop
 inputEvent _                       w = return w
 
-movePlayer :: Int -> Point -> World -> IO World
-movePlayer name pos w =
-  do walkingNPC (playerNpc (worldPlayer w)) pos
-     announce (playerNpc (worldPlayer w))
-     return w
+sendClientCommand cmd = error "sendClientCommand"
 
-stopPlayer :: Int -> World -> IO World
-stopPlayer name w =
-  do let pnpc = playerNpc (worldPlayer w)
-     waitingNPC pnpc Nothing False
-     announce pnpc
-     return w
+updateClientWorld    :: Float -> World -> IO World
+updateClientWorld t w =
+  do npcs' <- mapM (updateNPC [] t False) $ worldNpcs w
+     return w { worldNpcs = npcs' }
 
-updateWorld    :: Float -> World -> IO World
-updateWorld t w = do pnpc' <- updateNPC t False $ playerNpc $ worldPlayer w
-                     npcs' <- mapM (updateNPC t True) $ worldNpcs w
-                     return w { worldPlayer = (worldPlayer w) { playerNpc = pnpc' }
-                              , worldNpcs = npcs' }
+updateServerWorld    :: [Handle] -> Float -> ServerWorld -> IO ServerWorld
+updateServerWorld hs t w =
+  do pcs'  <- mapM (updatePlayer hs t)   $ serverPlayers w
+     npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
+     return w { serverPlayers = pcs'
+              , serverNpcs    = npcs'
+              }
+
+updatePlayer :: [Handle] -> Float -> Player -> IO Player
+updatePlayer hs t p =
+  do npc' <- updateNPC hs t False $ playerNpc p
+     return p { playerNpc = npc' }
 
 drawNPC :: NPC -> IO Picture
 drawNPC npc =
@@ -197,12 +258,15 @@ drawNPC npc =
         c   _                          = green
 
 
-
-
-serverMain n = do
-  sockets <- replicateM n accept
-  w <- initWorld True
-  announceWorld w sockets
-  forM sockets $ \s ->
-    forkIO $ handleSocket socket w
-  runGame w
+data Command
+  = Move Point
+  | Stop
+  | Attack
+  | Stun
+  | Die
+  deriving (Show, Read, Eq)
+  
+data ServerCommand
+  = ServerCommand Int Command
+  | SetWorld [Point]
+  deriving (Show, Read)
