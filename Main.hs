@@ -180,6 +180,12 @@ pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
 
 data ThinkTask = ChooseWait | ChooseDestination
 
+{- This performs one time tick update of an NPC.  It is important
+that we perofrm this operation atomically to avoid a race condition
+with external threads that try to modify the state (e.g., user input
+or commands from the server).  In addition to returning an updated NPC,
+we also return a kind of "continutaion" telling us what needs to be
+done next for computer controlled characters. -}
 updateNPC' :: Float -> NPC -> IO (NPC, Maybe ThinkTask)
 updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
   case state of
@@ -193,8 +199,8 @@ updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
         Nothing -> working state npc
         Just todo
           | todo < elapsed -> done ChooseDestination
-          | otherwise -> working (Waiting w { npcWaiting = Just (todo - elapsed) })
-                                 npc
+          | otherwise ->
+              working (Waiting w { npcWaiting = Just (todo - elapsed) }) npc
 
     Dead -> working state npc
 
