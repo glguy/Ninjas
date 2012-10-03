@@ -28,6 +28,11 @@ stopButton = MouseButton RightButton
 
 npcCount = 1
 
+
+eventsPerSecond = 100
+
+--------------------------------------------------------------------------------
+
 main :: IO ()
 main =
   do forkIO $ serverMain 1
@@ -47,7 +52,6 @@ serverMain n = do
   -- XXX: listen for client events
   runServer hs w
 
-eventsPerSecond = 100
 
 clientMain hostname =
   do h <- connectTo hostname gamePort
@@ -57,6 +61,8 @@ clientMain hostname =
      _ <- forkIO $ clientUpdates h w
      runGame w
 
+--- XXX: This is wrong because we keep using the NPC positions
+-- of the initial world.
 clientUpdates :: Handle -> World -> IO ()
 clientUpdates h w = forever $
   do ServerCommand name cmd <- readIO =<< hGetLine h
@@ -171,33 +177,52 @@ pickWaitTime :: Bool -> IO (Maybe Float)
 pickWaitTime False = return Nothing
 pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
 
-updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
-updateNPC hs t think npc = readIORef (npcState npc) >>= \state ->
+
+data ThinkTask = ChooseWait | ChooseDestination
+
+updateNPC' :: Float -> NPC -> IO (NPC, Maybe ThinkTask)
+updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
   case state of
     Walking w
-      | npcDist w < speed ->
-          do time <- pickWaitTime think
-             waitingNPC npc time False
-             return npc
+      | npcDist w < speed -> done ChooseWait
+      | otherwise -> working (Walking w { npcDist = npcDist w - speed })
+                             npc { npcPos = addPt (npcVelocity w) (npcPos npc) }
 
-      | otherwise ->
-          do writeIORef (npcState npc) (Walking w { npcDist = npcDist w - speed })
-             return npc { npcPos = addPt (npcVelocity w) (npcPos npc) }
     Waiting w ->
       case npcWaiting w of
-        Nothing -> return npc
+        Nothing -> working state npc
         Just todo
-          | todo < t  ->
-              do tgt <- randomBoardPoint
-                 walkingNPC npc tgt
-                 mapM_ (announce (ServerCommand (npcName npc) (Move tgt))) hs
-                 return npc
+          | todo < elapsed -> done ChooseDestination
+          | otherwise -> working (Waiting w { npcWaiting = Just (todo - elapsed) })
+                                 npc
 
-          | otherwise ->
-              do writeIORef (npcState npc) (Waiting w { npcWaiting = Just $ todo - t })
-                 return npc
+    Dead -> working state npc
 
-    Dead -> return npc
+  where done next = ( Waiting Wait { npcWaiting = Nothing, npcStunned = False }
+                    , (npc, Just next)
+                    )
+        working s n = (s,(n,Nothing))
+
+
+
+updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
+updateNPC hs t think npc =
+  do (npc',mbTask) <- updateNPC' t npc
+     when think $
+       case mbTask of
+
+         Just ChooseWait ->
+           do time <- pickWaitTime True
+              waitingNPC npc' time False
+
+         Just ChooseDestination ->
+            do tgt <- randomBoardPoint
+               walkingNPC npc' tgt
+               mapM_ (announce (ServerCommand (npcName npc') (Move tgt))) hs
+
+         Nothing -> return ()
+
+     return npc'
 
 announce msg h =
   do print msg
