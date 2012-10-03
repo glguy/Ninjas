@@ -208,6 +208,13 @@ updateNPC' elapsed npc = atomicModifyIORef (npcState npc) $ \state ->
 updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
   do (npc',mbTask) <- updateNPC' t npc
+
+{- Note that if we need to think, then we are a computer contorolled
+NPC and so ther should be no external threads---such as user input,
+or instructions from the server---that can modify the state.
+This is why updating the state in the code bellow does not lead
+to a race condition. -}
+
      when think $
        case mbTask of
 
