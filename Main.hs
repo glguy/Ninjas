@@ -49,14 +49,12 @@ serverMain :: Int -> IO ()
 serverMain n = do
   listenH <- listenOn gamePort
   forkIO $ do
-    conns <- replicateM n (accept listenH)
-    let hs = [h | (h,_,_) <- conns]
+    hs <- getConnections listenH n
     w  <- initServerWorld n
     var <- newMVar w
     let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
     forM_ (zip [0..] hs) $ \(i,h) ->
-      do hSetBuffering h NoBuffering
-         hPrint h setCommand
+      do hPrint h setCommand
          forkIO $ clientSocketLoop i hs var
     var <- newMVar w
     runServer hs var
@@ -77,13 +75,35 @@ clientSocketLoop i hs ref = forever $
             _        -> return ()
 
 
+clientMain :: HostName -> IO ()
 clientMain hostname =
   do h <- connectTo hostname gamePort
-     hSetBuffering h NoBuffering
-     SetWorld poss <- readIO =<< hGetLine h
+     hSetBuffering h LineBuffering
+
+     poss <- getInitialWorld h
      r <- newIORef =<< initClientWorld poss
      _ <- forkIO $ clientUpdates h r
      runGame h r
+
+getConnections :: Socket -> Int -> IO [Handle]
+getConnections s = aux []
+  where
+  aux hs 0 = return hs
+  aux hs i =
+    do announce (ServerWaiting i) hs
+       (h,host,port) <- accept s
+       hSetBuffering h LineBuffering
+       putStrLn $ "Got connection from " ++ host ++ ":" ++ show port
+       aux (h:hs) (i-1)
+
+getInitialWorld :: Handle -> IO [Point]
+getInitialWorld h =
+  do msg <- readIO =<< hGetLine h
+     case msg of
+       SetWorld poss -> return poss
+       ServerWaiting n ->
+         do putStrLn $ "Server waiting for " ++ show n ++ " more clients"
+            getInitialWorld h
 
 --- XXX: This is wrong because we keep using the NPC positions
 -- of the initial world.
@@ -318,4 +338,5 @@ data Command
 data ServerCommand
   = ServerCommand Int Command
   | SetWorld [Point]
+  | ServerWaiting Int
   deriving (Show, Read)
