@@ -10,6 +10,7 @@ import System.Environment
 import Data.IORef
 import Control.Concurrent.MVar
 import Network
+import Debug.Trace
 
 gamePort = PortNumber 16000
 
@@ -27,10 +28,11 @@ restTime = 2
 
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
+attackButton = Char 'a'
 
-npcCount = 25
+npcCount = 1
 
-attackRadius = 50
+attackRadius = 100
 
 stunTime = 3
 
@@ -62,7 +64,7 @@ serverMain n = do
       do hSetBuffering h NoBuffering
          hPrint h setCommand
          forkIO $ clientSocketLoop i hs var
-    var <- newMVar w
+    -- var <- newMVar w
     runServer hs var
   _ <- getLine
   return ()
@@ -73,11 +75,18 @@ clientSocketLoop i hs ref = forever $
      cmd <- readIO =<< hGetLine h
      putStrLn $ "Client command: " ++ show cmd
      withMVar ref $ \w ->
-       do let p = serverPlayers w !! i
-          announce (ServerCommand i cmd) hs
+       do let players = map playerNpc (serverPlayers w)
+              me      = players !! i
+              notMe p = npcName p /= npcName me
+
+          -- XXX: These should work only if the player is not dead!
           case cmd of
-            Move pos -> walkingNPC (playerNpc p) pos
-            Stop     -> waitingNPC (playerNpc p) Nothing False
+            Move pos -> walkingNPC me pos >> announce (ServerCommand i cmd) hs
+            Stop     -> waitingNPC me Nothing False >> announce (ServerCommand i cmd) hs
+            Attack   -> do cs <- performAttack me
+                                    (filter notMe players)
+                                    (serverNpcs w)
+                           mapM_ (`announce` hs) cs
             _        -> return ()
 
 
@@ -97,7 +106,9 @@ clientUpdates h r = forever $
      case cmd of
        Move pos -> walkingNPC npc pos
        Stop     -> waitingNPC npc Nothing False
-       Stun     -> waitingNPC npc Nothing True
+       Stun     -> stunnedNPC npc
+       Die      -> deadNPC npc
+       Attack   -> return ()
 
 runGame :: Handle -> IORef World -> IO ()
 runGame h r =
@@ -180,15 +191,18 @@ stunnedNPC npc = waitingNPC npc (Just stunTime) True
 
 performAttack :: NPC -> [NPC] -> [NPC] -> IO [ServerCommand]
 performAttack attacker players npcs =
-  do as <- mapM kill (affected players)
+  do putStrLn "Performing attack!"
+     as <- mapM kill (affected players)
      bs <- mapM stun (affected npcs)
      return (as ++ bs)
   where
-  distance someone = len (subPt (npcPos someone) (npcPos attacker))
+  distance someone = let x =  len (subPt (npcPos someone) (npcPos attacker))
+                     in trace ("distance = " ++ show x) x
   affected         = filter ((<= attackRadius) . distance)
   kill player      = do deadNPC player
                         return (ServerCommand (npcName player) Die)
-  stun npc         = do stunnedNPC npc
+  stun npc         = do putStrLn "stunned!"
+                        stunnedNPC npc
                         return (ServerCommand (npcName npc) Stun)
 
 
@@ -305,6 +319,7 @@ inputEvent     :: Handle -> Event -> World -> IO World
 inputEvent h (EventKey k Down _ pos) w
   | k == moveButton  = hPrint h (Move pos) >> return w
   | k == stopButton  = hPrint h Stop >> return w
+  | k == attackButton = hPrint h Attack >> return w
 inputEvent _ _                       w = return w
 
 updateClientWorld :: IORef World -> Float -> World -> IO World
@@ -331,7 +346,8 @@ drawNPC :: NPC -> IO Picture
 drawNPC npc =
   do state <- readIORef (npcState npc)
      return $ translate x y $ color (c state)
-            $ pictures [ line [(0,0),end state], circle 10 ]
+            $ pictures [ line [(0,0),end state], circle 10
+                       , color white (circle attackRadius) ]
 
   where (x,y) = npcPos npc
         end (Walking w) = npcVelocity w * 10
