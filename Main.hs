@@ -12,6 +12,8 @@ import Control.Concurrent.MVar
 import Network
 import Debug.Trace
 
+import NetworkMessages
+
 gamePort = PortNumber 16000
 
 boardMin :: Point
@@ -30,7 +32,7 @@ moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 attackButton = Char 'a'
 
-npcCount = 1
+npcCount = 5
 
 attackRadius = 100
 
@@ -53,23 +55,23 @@ main =
 
 serverMain :: Int -> IO ()
 serverMain n = do
-  listenH <- listenOn gamePort
+  sock <- listenOn gamePort
   forkIO $ do
-    hs <- getConnections listenH n
-    w  <- initServerWorld n
+    hs <- getConnections sock n
+    sClose sock
+    w   <- initServerWorld n
     var <- newMVar w
     let setCommand = SetWorld (map npcPos (map playerNpc (serverPlayers w) ++ serverNpcs w))
     forM_ (zip [0..] hs) $ \(i,h) ->
-      do hPrint h setCommand
-         forkIO $ clientSocketLoop i hs var
+      do hPutServerCommand h setCommand
+         forkIO $ clientSocketLoop i hs h var
     runServer hs var
   _ <- getLine
   return ()
 
-clientSocketLoop :: Int -> [Handle] -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs ref = forever $
-  do let h = hs !! i
-     cmd <- readIO =<< hGetLine h
+clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop i hs h ref = forever $
+  do cmd <- hGetCommand h
      putStrLn $ "Client command: " ++ show cmd
      withMVar ref $ \w ->
        do let players = map playerNpc (serverPlayers w)
@@ -77,14 +79,16 @@ clientSocketLoop i hs ref = forever $
               notMe p = npcName p /= npcName me
 
           -- XXX: These should work only if the player is not dead!
-          case cmd of
-            Move pos -> walkingNPC me pos >> announce (ServerCommand i cmd) hs
-            Stop     -> waitingNPC me Nothing False >> announce (ServerCommand i cmd) hs
-            Attack   -> do cs <- performAttack me
-                                    (filter notMe players)
-                                    (serverNpcs w)
-                           mapM_ (`announce` hs) cs
-            _        -> return ()
+          msgs <- case cmd of
+            Move pos -> do walkingNPC me pos
+                           return [ServerCommand i cmd]
+            Stop     -> do waitingNPC me Nothing False
+                           return [ServerCommand i cmd]
+            Attack   -> do performAttack me
+                             (filter notMe players)
+                             (serverNpcs w)
+            _        -> do return []
+          forM_ msgs $ \msg -> announce msg hs
 
 
 clientMain :: HostName -> IO ()
@@ -110,18 +114,17 @@ getConnections s = aux []
 
 getInitialWorld :: Handle -> IO [Point]
 getInitialWorld h =
-  do msg <- readIO =<< hGetLine h
+  do msg <- hGetServerCommand h
      case msg of
        SetWorld poss -> return poss
        ServerWaiting n ->
          do putStrLn $ "Server waiting for " ++ show n ++ " more clients"
             getInitialWorld h
+       _ -> fail "Unexpected initial message"
 
---- XXX: This is wrong because we keep using the NPC positions
--- of the initial world.
 clientUpdates :: Handle -> IORef World -> IO ()
 clientUpdates h r = forever $
-  do ServerCommand name cmd <- readIO =<< hGetLine h
+  do ServerCommand name cmd <- hGetServerCommand h
      w <- readIORef r
      let npc = worldNpcs w !! name
      case cmd of
@@ -319,8 +322,7 @@ to a race condition. -}
      return npc'
 
 announce msg hs =
-  do print msg
-     mapM_ (`hPrint` msg) hs
+  do mapM_ (`hPutServerCommand` msg) hs
 
 initClientWorld :: [Point] -> IO World
 initClientWorld poss =
@@ -338,10 +340,10 @@ drawWorld w     = fmap pictures $ mapM drawNPC $ worldNpcs w
 
 inputEvent     :: Handle -> Event -> World -> IO World
 inputEvent h (EventKey k Down _ pos) w
-  | k == moveButton  = hPrint h (Move pos) >> return w
-  | k == stopButton  = hPrint h Stop >> return w
-  | k == attackButton = hPrint h Attack >> return w
-inputEvent _ _                       w = return w
+  | k == moveButton   = hPutCommand h (Move pos) >> return w
+  | k == stopButton   = hPutCommand h Stop       >> return w
+  | k == attackButton = hPutCommand h Attack     >> return w
+inputEvent _ _ w = return w
 
 updateClientWorld :: IORef World -> Float -> World -> IO World
 updateClientWorld r t w =
@@ -379,18 +381,3 @@ drawNPC npc =
         c   Dead                       = red
         c   (Waiting w) | npcStunned w = yellow
         c   _                          = green
-
-
-data Command
-  = Move Point
-  | Stop
-  | Attack
-  | Stun
-  | Die
-  deriving (Show, Read, Eq)
-  
-data ServerCommand
-  = ServerCommand Int Command
-  | SetWorld [Point]
-  | ServerWaiting Int
-  deriving (Show, Read)
