@@ -28,6 +28,10 @@ stopButton = MouseButton RightButton
 
 npcCount = 25
 
+attackRadius = 50
+
+stunTime = 3
+
 
 eventsPerSecond = 100
 
@@ -145,6 +149,26 @@ waitingNPC npc npcWaiting npcStunned = writeIORef (npcState npc) state
   where
   state = Waiting Wait { .. }
 
+deadNPC :: NPC -> IO ()
+deadNPC npc = writeIORef (npcState npc) Dead
+
+stunnedNPC :: NPC -> IO ()
+stunnedNPC npc = waitingNPC npc (Just stunTime) True
+
+
+performAttack :: NPC -> [NPC] -> [NPC] -> IO [ServerCommand]
+performAttack attacker players npcs =
+  do as <- mapM kill (affected players)
+     bs <- mapM stun (affected npcs)
+     return (as ++ bs)
+  where
+  distance someone = len (subPt (npcPos someone) (npcPos attacker))
+  affected         = filter ((<= attackRadius) . distance)
+  kill player      = do deadNPC player
+                        return (ServerCommand (npcName player) Die)
+  stun npc         = do stunnedNPC npc
+                        return (ServerCommand (npcName npc) Stun)
+
 
 randomPoint :: Point -> Point -> IO Point
 randomPoint (minX,minY) (maxX,maxY) =
@@ -180,8 +204,8 @@ pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
 
 data ThinkTask = ChooseWait | ChooseDestination
 
-{- This performs one time tick update of an NPC.  It is important
-that we perofrm this operation atomically to avoid a race condition
+{- This performs one time tick update of a character.  It is important
+that we perofrm this operation atomically to avoid a race conditions
 with external threads that try to modify the state (e.g., user input
 or commands from the server).  In addition to returning an updated NPC,
 we also return a kind of "continutaion" telling us what needs to be
