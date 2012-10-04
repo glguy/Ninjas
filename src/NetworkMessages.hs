@@ -18,21 +18,28 @@ data Command
   | Stun
   | Die
   deriving (Show, Read, Eq)
+
+data ClientCommand
+  = ClientCommand Command
+  | ClientJoin String
+  deriving (Show, Read, Eq)
   
 data ServerCommand
   = ServerCommand Int Command
   | SetWorld [(Point,Vector)]
   | ServerWaiting Int
+  | ServerMessage String
+  | ServerDing
   deriving (Show, Read)
+
+hGetClientCommand :: Handle -> IO ClientCommand
+hGetClientCommand = hGetCmd
+
+hPutClientCommand :: Handle -> ClientCommand -> IO ()
+hPutClientCommand = hPutCmd
 
 hGetServerCommand :: Handle -> IO ServerCommand
 hGetServerCommand = hGetCmd
-
-hGetCommand :: Handle -> IO Command
-hGetCommand = hGetCmd
-
-hPutCommand :: Handle -> Command -> IO ()
-hPutCommand = hPutCmd
 
 hPutServerCommand :: Handle -> ServerCommand -> IO ()
 hPutServerCommand = hPutCmd
@@ -58,6 +65,10 @@ instance Binary ServerCommand where
   put = putServerCommand
   get = getServerCommand
 
+instance Binary ClientCommand where
+  put = putClientCommand
+  get = getClientCommand
+
 putCommand :: Command -> Put
 putCommand cmd =
   case cmd of
@@ -78,6 +89,20 @@ getCommand =
        5 -> return Die
        _ -> error ("getCommand: bad tag " ++ show tag)
 
+putClientCommand :: ClientCommand -> Put
+putClientCommand cmd =
+  case cmd of
+    ClientCommand c -> putWord8 1 >> put c
+    ClientJoin name -> putWord8 2 >> put name
+
+getClientCommand :: Get ClientCommand
+getClientCommand =
+  do tag <- getWord8
+     case tag of
+       1 -> return ClientCommand `ap` get
+       2 -> return ClientJoin    `ap` get
+       _ -> error ("getClientCommand: bad tag " ++ show tag)
+
 getServerCommand :: Get ServerCommand
 getServerCommand =
   do tag <- getWord8
@@ -85,6 +110,8 @@ getServerCommand =
        1 -> return ServerCommand `ap` get `ap` get
        2 -> return SetWorld      `ap` get
        3 -> return ServerWaiting `ap` get
+       4 -> return ServerMessage `ap` get
+       5 -> return ServerDing
        _ -> error ("getServerCommand: bad tag " ++ show tag)
 
 putServerCommand :: ServerCommand -> Put
@@ -93,3 +120,5 @@ putServerCommand cmd =
     ServerCommand i c -> putWord8 1 >> put i >> put c
     SetWorld      xs  -> putWord8 2 >> put xs
     ServerWaiting i   -> putWord8 3 >> put i
+    ServerMessage txt -> putWord8 4 >> put txt
+    ServerDing        -> putWord8 5

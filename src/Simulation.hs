@@ -11,10 +11,10 @@ import System.Random (randomRIO)
 import NetworkMessages
 
 boardMin :: Point
-boardMin = (-250,-250)
+boardMin = (-350,-250)
 
 boardMax :: Point
-boardMax = (250,250)
+boardMax = (350,250)
 
 speed :: Float
 speed = 1
@@ -29,7 +29,7 @@ ninjaRadius :: Float
 ninjaRadius = 10
 
 attackDistance :: Float
-attackDistance = 100
+attackDistance = 75
 
 attackAngle    :: Float
 attackAngle    = pi / 4
@@ -49,7 +49,7 @@ data NPC      = NPC
   }
   deriving (Read, Show, Eq)
 
-data Player   = Player { playerNpc :: NPC }
+data Player   = Player { playerNpc :: NPC, playerUsername :: String }
   deriving (Show, Read, Eq)
 
 data State
@@ -102,11 +102,12 @@ updateNPC' elapsed npc =
           | otherwise ->
               working (Waiting w { npcWaiting = Just (todo - elapsed) }) npc
 
-    Dead -> working state npc
 
     Attacking delay
       | elapsed > delay -> (waitingNPC npc Nothing False                  , Nothing)
       | otherwise       -> (npc { npcState = Attacking (delay - elapsed)} , Nothing)
+
+    Dead -> (npc, Nothing)
 
   where state = npcState npc
 
@@ -224,8 +225,8 @@ initServerNPC think npcName =
          npcState = Waiting Wait { .. }
      return NPC { .. }
 
-initPlayer :: Int -> IO Player
-initPlayer name =
+initPlayer :: Int -> String -> IO Player
+initPlayer name playerUsername =
   do playerNpc <- initServerNPC False name
      return Player { .. }
 

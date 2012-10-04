@@ -3,7 +3,9 @@ module Server (serverMain) where
 
 import Control.Concurrent
 import Control.Monad
+import Data.Maybe (fromMaybe)
 import Graphics.Gloss.Data.Point
+import Graphics.Gloss.Geometry.Line
 import Network
 import System.IO
 
@@ -18,9 +20,10 @@ serverMain :: Int -> IO ()
 serverMain n = do
   sock <- listenOn gamePort
   _ <- forkIO $ do
-    hs <- getConnections sock n
+    conns <- getConnections sock n
+    let (hs,names) = unzip conns
     sClose sock
-    w   <- initServerWorld n
+    w   <- initServerWorld n names
     var <- newMVar w
     let setCommand = generateSetWorld w
     forM_ (zip [0..] hs) $ \(i,h) ->
@@ -45,7 +48,7 @@ isStuckPlayer p =
 
 clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
-  do cmd <- hGetCommand h
+  do ClientCommand cmd <- hGetClientCommand h
      putStrLn $ "Client command: " ++ show cmd
      msgs <- modifyMVar var $ \w -> return $
        let players = serverPlayers w
@@ -54,10 +57,13 @@ clientSocketLoop i hs h var = forever $
 
        in case cmd of
             _        | isStuckPlayer me -> (w,[])
-            Move pos | pointInBox pos boardMin boardMax
-                     -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
-                        , [ServerCommand i cmd]
+            Move pos0 ->
+              let pos = constrainPoint (npcPos (playerNpc me)) pos0
+              in if pointInBox pos boardMin boardMax
+                 then   ( updatePlayerNpc $ \npc -> walkingNPC npc pos
+                        , [ServerCommand i (Move pos)]
                         )
+                 else   (w, [])
             Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
                         , [ServerCommand i cmd]
                         )
@@ -70,16 +76,17 @@ clientSocketLoop i hs h var = forever $
             _        -> (w,[])
      forM_ msgs $ \msg -> announce msg hs
 
-getConnections :: Socket -> Int -> IO [Handle]
+getConnections :: Socket -> Int -> IO [(Handle,String)]
 getConnections s = aux []
   where
   aux hs 0 = return hs
   aux hs i =
-    do announce (ServerWaiting i) hs
+    do announce (ServerWaiting i) (map fst hs)
        (h,host,port) <- accept s
        hSetBuffering h LineBuffering
-       putStrLn $ "Got connection from " ++ host ++ ":" ++ show port
-       aux (h:hs) (i-1)
+       ClientJoin name <- hGetClientCommand h
+       putStrLn $ "Got connection from " ++ name ++ "@" ++ host ++ ":" ++ show port
+       aux ((h,name):hs) (i-1)
 
 runServer :: [Handle] -> MVar ServerWorld -> IO a
 runServer hs w = forever $
@@ -90,9 +97,9 @@ runServer hs w = forever $
 announce :: ServerCommand -> [Handle] -> IO ()
 announce msg hs = mapM_ (`hPutServerCommand` msg) hs
 
-initServerWorld :: Int -> IO ServerWorld
-initServerWorld playerCount =
-  do serverPlayers <- mapM (initPlayer        ) [0 .. playerCount - 1]
+initServerWorld :: Int -> [String] -> IO ServerWorld
+initServerWorld playerCount names =
+  do serverPlayers <- zipWithM initPlayer [0 ..] names
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
      return ServerWorld { .. }
 
@@ -126,3 +133,12 @@ updateNPC hs t think npc =
             return $ walkingNPC npc' tgt
 
        Nothing -> return npc'
+
+constrainPoint :: Point -> Point -> Point
+constrainPoint from
+  = aux intersectSegVertLine (fst boardMin)
+  . aux intersectSegVertLine (fst boardMax)
+  . aux intersectSegHorzLine (snd boardMin)
+  . aux intersectSegHorzLine (snd boardMax)
+  where
+  aux f x p = fromMaybe p (f from p x)
