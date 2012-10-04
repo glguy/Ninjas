@@ -36,6 +36,13 @@ generateSetWorld w = SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w]
 allNpcs :: ServerWorld -> [NPC]
 allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
 
+isStuckPlayer :: Player -> Bool
+isStuckPlayer p =
+  case npcState (playerNpc p) of
+    Dead          -> True
+    Attacking {}  -> True
+    _             -> False
+
 clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
   do cmd <- hGetCommand h
@@ -46,7 +53,7 @@ clientSocketLoop i hs h var = forever $
            updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
 
        in case cmd of
-            _        | npcState (playerNpc me) == Dead -> (w,[])
+            _        | isStuckPlayer me -> (w,[])
             Move pos | pointInBox pos boardMin boardMax
                      -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
                         , [ServerCommand i cmd]

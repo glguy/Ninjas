@@ -77,6 +77,7 @@ drawNPC npc =
         (x,y) = npcPos npc
 
         c   Dead                       = red
+        c   (Attacking _)              = makeColor8 0xa0 0x20 0xf0 0xff -- purple
         c   (Waiting w) | npcStunned w = yellow
         c   _                          = green
 
@@ -116,5 +117,4 @@ clientUpdates h var = forever $
     Stop     -> waitingNPC npc Nothing False
     Stun     -> stunnedNPC npc
     Die      -> deadNPC npc
-    Attack   -> npc -- XXX need to set attack state
-
+    Attack   -> attackNPC npc

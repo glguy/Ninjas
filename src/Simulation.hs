@@ -19,6 +19,9 @@ boardMax = (250,250)
 speed :: Float
 speed = 1
 
+attackDelay :: Float
+attackDelay = 1
+
 restTime :: Float
 restTime = 2
 
@@ -49,7 +52,11 @@ data NPC      = NPC
 data Player   = Player { playerNpc :: NPC }
   deriving (Show, Read, Eq)
 
-data State    = Walking WalkInfo | Waiting WaitInfo | Dead
+data State
+  = Walking WalkInfo
+  | Waiting WaitInfo
+  | Dead
+  | Attacking Float
   deriving (Show, Read, Eq)
 
 data WalkInfo = Walk { npcTarget    :: Point
@@ -97,6 +104,10 @@ updateNPC' elapsed npc =
 
     Dead -> working state npc
 
+    Attacking delay
+      | elapsed > delay -> (waitingNPC npc Nothing False                  , Nothing)
+      | otherwise       -> (npc { npcState = Attacking (delay - elapsed)} , Nothing)
+
   where state = npcState npc
 
         done next = (npc { npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False } }
@@ -138,10 +149,16 @@ deadNPC npc = npc { npcState = Dead }
 stunnedNPC :: NPC -> NPC
 stunnedNPC npc = waitingNPC npc (Just stunTime) True
 
+attackNPC :: NPC -> NPC
+attackNPC npc = npc { npcState = Attacking attackDelay }
 
 performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [ServerCommand])
 performAttack attacker players npcs =
-  (attacker , players' , npcs' , attackCmd : catMaybes (commands1 ++ commands2))
+  ( mapPlayerNpc attackNPC attacker
+  , players'
+  , npcs'
+  , attackCmd : catMaybes (commands1 ++ commands2)
+  )
   where
   attackCmd = ServerCommand (npcName pnpc) Attack
 
