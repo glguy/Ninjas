@@ -8,6 +8,8 @@ import Data.Maybe
 import Debug.Trace
 import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
+import Graphics.Gloss.Data.Point
+import Graphics.Gloss.Data.Vector
 import Network
 import System.Environment
 import System.IO
@@ -15,7 +17,11 @@ import System.Random
 
 import NetworkMessages
 
+gamePort :: PortID
 gamePort = PortNumber 16000
+
+windowPadding :: Int
+windowPadding = 20
 
 boardMin :: Point
 boardMin = (-250,-250)
@@ -32,13 +38,19 @@ restTime = 2
 ninjaRadius :: Float
 ninjaRadius = 10
 
+moveButton, stopButton, attackButton :: Key
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 attackButton = Char 'a'
 
-npcCount = 5
+npcCount :: Int
+npcCount = 30
 
-attackRadius = 100
+attackDistance :: Float
+attackDistance = 100
+
+attackAngle    :: Float
+attackAngle    = pi/4
 
 stunTime = 3
 
@@ -93,7 +105,8 @@ clientSocketLoop i hs h var = forever $
 
           -- XXX: These should work only if the player is not dead!
           return $ case cmd of
-            Move pos -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
+            Move pos | pointInBox pos boardMin boardMax
+                     -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
                         , [ServerCommand i cmd]
                         )
             Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
@@ -155,8 +168,10 @@ clientUpdates h var = forever $
 runGame :: Handle -> MVar World -> IO ()
 runGame h var =
      playIO
-       (InWindow "test" (round width, round height) (10,10)) black eventsPerSecond
-       ()
+       (InWindow "Ninjas" (round width + windowPadding, round height + windowPadding) (10,10))
+       black
+       eventsPerSecond
+       () -- "state"
        (\() -> fmap drawWorld (readMVar var))
        (inputEvent h)
        (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
@@ -173,14 +188,6 @@ addPt (x,y) (a,b) = (x+a,y+b)
 
 subPt :: Point -> Point -> Point
 subPt (x,y) (a,b) = (x-a,y-b)
-
-len :: Point -> Float
-len (x,y) = sqrt (x * x + y * y)
-
-scalePt :: Float -> Point -> Point
-scalePt s (x,y) = (s * x, s * y)
-
-
 
 data NPC      = NPC
   { npcName   :: Int
@@ -227,13 +234,13 @@ walkingNPC npc npcTarget = npc { npcState = state
   where
   state       = Walking Walk { .. }
 
-  facing      | npcDist > 0.001 = scalePt (1 / npcDist) path
+  facing      | npcDist > 0.001 = mulSV (1 / npcDist) path
               | otherwise       = npcFacing npc
 
-  npcVelocity = scalePt speed facing
+  npcVelocity = mulSV speed facing
 
   path        = subPt npcTarget (npcPos npc)
-  npcDist     = len path
+  npcDist     = magV path
 
 waitingNPC :: NPC -> Maybe Float -> Bool -> NPC
 waitingNPC npc npcWaiting npcStunned = npc { npcState = state }
@@ -251,14 +258,20 @@ performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [Serve
 performAttack attacker players npcs =
   (attacker , players' , npcs' , attackCmd : catMaybes (commands1 ++ commands2))
   where
-  attackCmd = ServerCommand (npcName (playerNpc attacker)) Attack
+  attackCmd = ServerCommand (npcName pnpc) Attack
 
   (players', commands1) = unzip $ map checkKill players
   (npcs'   , commands2) = unzip $ map checkStun npcs
 
-  distance someone = let x =  len (subPt (npcPos someone) (npcPos (playerNpc attacker)))
-                     in trace ("distance = " ++ show x) x
-  affected npc     = distance npc <= attackRadius -- XXX fancy cone math
+  pnpc             = playerNpc attacker
+
+  affected npc     = attackLen       <= attackDistance
+                  && cos attackAngle <= npcFacing pnpc `dotV` attackVector1
+    where
+    attackVector   = subPt (npcPos npc) (npcPos pnpc)
+    attackLen      = magV attackVector
+    attackVector1  = mulSV (recip attackLen) attackVector
+
   checkKill player
     | affected npc = ( player { playerNpc = deadNPC npc }
                      , Just (ServerCommand (npcName npc) Die)
@@ -288,6 +301,12 @@ randomUnitVector =
   do degrees <- randomRIO (0,359) :: IO Int
      let rads = pi * fromIntegral degrees / 180 :: Float
      return (cos rads, sin rads)
+
+vectorToAngle :: Vector -> Float
+vectorToAngle (x,y)
+  | x < 0     = pi + atan (y/x)
+  | otherwise =      atan (y/x)
+  
 
 initClientNPC :: Int -> (Point, Vector) -> NPC
 initClientNPC npcName (npcPos, npcFacing) =
@@ -402,21 +421,32 @@ updatePlayer hs t p =
      return p { playerNpc = npc' }
 
 drawWorld      :: World -> Picture
-drawWorld       = pictures . map drawNPC . worldNpcs
+drawWorld w     = pictures (borderPicture : map drawNPC (worldNpcs w))
+
+borderPicture   = color red $ rectangleWire width height
+  where (width,height) = subPt boardMax boardMin
 
 drawNPC :: NPC -> Picture
 drawNPC npc =
   let state = npcState npc
   in  translate x y $ color (c state)
-            $ pictures [ line [(0,0),scalePt ninjaRadius $ npcFacing npc]
+            $ pictures [ line [(0,0), mulSV ninjaRadius $ npcFacing npc]
                        , circle ninjaRadius
-                       , color white (circle attackRadius) ]
+                       , color white attackArc ]
   where
         (x,y) = npcPos npc
 
         c   Dead                       = red
         c   (Waiting w) | npcStunned w = yellow
         c   _                          = green
+
+        attackArc = arcRad (rads - attackAngle) (rads + attackAngle) attackDistance
+          where
+          rads = vectorToAngle (npcFacing npc)
+
+radToDeg rad = 180 / pi * rad
+
+arcRad a b = arc (radToDeg a) (radToDeg b)
 
 updateList 0 f (x:xs) = f x : xs
 updateList i f (x:xs) = x : updateList (i-1) f xs
