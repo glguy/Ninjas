@@ -10,6 +10,7 @@ import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Data.Vector
+import Graphics.Gloss.Geometry.Angle
 import Network
 import System.Environment
 import System.IO
@@ -44,17 +45,18 @@ stopButton = MouseButton RightButton
 attackButton = Char 'a'
 
 npcCount :: Int
-npcCount = 30
+npcCount = 1
 
 attackDistance :: Float
 attackDistance = 100
 
 attackAngle    :: Float
-attackAngle    = pi/4
+attackAngle    = pi / 4
 
+stunTime :: Float
 stunTime = 3
 
-
+eventsPerSecond :: Int
 eventsPerSecond = 100
 
 --------------------------------------------------------------------------------
@@ -298,15 +300,9 @@ randomBoardPoint = randomPoint boardMin boardMax
 
 randomUnitVector :: IO Vector
 randomUnitVector =
-  do degrees <- randomRIO (0,359) :: IO Int
-     let rads = pi * fromIntegral degrees / 180 :: Float
-     return (cos rads, sin rads)
-
-vectorToAngle :: Vector -> Float
-vectorToAngle (x,y)
-  | x < 0     = pi + atan (y/x)
-  | otherwise =      atan (y/x)
-  
+  do degrees <- randomRIO (0,359)
+     let rads = degToRad $ fromInteger degrees
+     return $ unitVectorAtAngle rads
 
 initClientNPC :: Int -> (Point, Vector) -> NPC
 initClientNPC npcName (npcPos, npcFacing) =
@@ -429,10 +425,12 @@ borderPicture   = color red $ rectangleWire width height
 drawNPC :: NPC -> Picture
 drawNPC npc =
   let state = npcState npc
-  in  translate x y $ color (c state)
-            $ pictures [ line [(0,0), mulSV ninjaRadius $ npcFacing npc]
-                       , circle ninjaRadius
-                       , color white attackArc ]
+  in  translate x y
+    $ rotate (negate $ radToDeg rads)
+    $ color (c state)
+    $ pictures [ directionWedge
+               , circle ninjaRadius
+               , color white attackArc ]
   where
         (x,y) = npcPos npc
 
@@ -440,11 +438,15 @@ drawNPC npc =
         c   (Waiting w) | npcStunned w = yellow
         c   _                          = green
 
-        attackArc = arcRad (rads - attackAngle) (rads + attackAngle) attackDistance
-          where
-          rads = vectorToAngle (npcFacing npc)
+        rads = argV $ npcFacing npc
 
-radToDeg rad = 180 / pi * rad
+        directionWedge =
+          line [ rotateV attackAngle (ninjaRadius, 0)
+               , (0,0)
+               , rotateV (negate attackAngle) (ninjaRadius, 0)
+               ]
+
+        attackArc = arcRad (negate attackAngle) attackAngle attackDistance
 
 arcRad a b = arc (radToDeg a) (radToDeg b)
 
