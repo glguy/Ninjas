@@ -40,13 +40,13 @@ clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
   do cmd <- hGetCommand h
      putStrLn $ "Client command: " ++ show cmd
-     msgs <- modifyMVar var $ \w ->
-       do let players = serverPlayers w
-              (me,them) = extract i players
-              updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
+     msgs <- modifyMVar var $ \w -> return $
+       let players = serverPlayers w
+           (me,them) = extract i players
+           updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
 
-          -- XXX: These should work only if the player is not dead!
-          return $ case cmd of
+       in case cmd of
+            _        | npcState (playerNpc me) == Dead -> (w,[])
             Move pos | pointInBox pos boardMin boardMax
                      -> ( updatePlayerNpc $ \npc -> walkingNPC npc pos
                         , [ServerCommand i cmd]

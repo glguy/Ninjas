@@ -44,21 +44,23 @@ data NPC      = NPC
   , npcFacing :: Vector -- Unit vector
   , npcState  :: State
   }
+  deriving (Read, Show, Eq)
 
 data Player   = Player { playerNpc :: NPC }
+  deriving (Show, Read, Eq)
 
 data State    = Walking WalkInfo | Waiting WaitInfo | Dead
-  deriving (Show)
+  deriving (Show, Read, Eq)
 
 data WalkInfo = Walk { npcTarget    :: Point
                      -- Cached, so that we don't recompute all the time.
                      , npcDist      :: Float
                      , npcVelocity  :: Vector
                      }
-  deriving (Show)
+  deriving (Show, Read, Eq)
 
 data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
-  deriving (Show)
+  deriving (Show, Read, Eq)
 
 data World = World
   { worldNpcs        :: [NPC]
