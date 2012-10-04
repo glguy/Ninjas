@@ -3,6 +3,7 @@
 module Simulation where
 
 import Data.Maybe (catMaybes)
+import Data.List  (findIndex)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
@@ -40,6 +41,11 @@ stunTime = 3
 eventsPerSecond :: Int
 eventsPerSecond = 100
 
+pillars :: [Point]
+pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
+
+pillarSize :: Float
+pillarSize = 30
 
 data NPC      = NPC
   { npcName   :: Int
@@ -49,7 +55,11 @@ data NPC      = NPC
   }
   deriving (Read, Show, Eq)
 
-data Player   = Player { playerNpc :: NPC, playerUsername :: String }
+data Player   = Player
+  { playerNpc      :: NPC
+  , playerUsername :: String
+  , playerVisited  :: [Int]
+  }
   deriving (Show, Read, Eq)
 
 data State
@@ -71,21 +81,18 @@ data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
 
 data World = World
   { worldNpcs        :: [NPC]
+  , dingTimers       :: [Float]
+  , worldMessage     :: String
   }
 
 data ServerWorld = ServerWorld
   { serverNpcs    :: [NPC]
   , serverPlayers :: [Player]
+  , serverActive  :: Bool
   }
 
 data ThinkTask = ChooseWait | ChooseDestination
 
-{- This performs one time tick update of a character.  It is important
-that we perofrm this operation atomically to avoid a race conditions
-with external threads that try to modify the state (e.g., user input
-or commands from the server).  In addition to returning an updated NPC,
-we also return a kind of "continutaion" telling us what needs to be
-done next for computer controlled characters. -}
 updateNPC' :: Float -> NPC -> (NPC, Maybe ThinkTask)
 updateNPC' elapsed npc =
   case state of
@@ -228,8 +235,15 @@ initServerNPC think npcName =
 initPlayer :: Int -> String -> IO Player
 initPlayer name playerUsername =
   do playerNpc <- initServerNPC False name
+     let playerVisited = []
      return Player { .. }
 
 pickWaitTime :: Bool -> IO (Maybe Float)
 pickWaitTime False = return Nothing
 pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
+
+isInPillar :: Point -> Point -> Bool
+isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2) (x+pillarSize/2, y+pillarSize/2)
+
+whichPillar :: Point -> Maybe Int
+whichPillar p = findIndex (isInPillar p) pillars

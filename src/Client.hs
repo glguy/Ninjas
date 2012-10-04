@@ -21,6 +21,14 @@ attackButton = Char 'a'
 windowPadding :: Int
 windowPadding = 60
 
+dingPeriod :: Float
+dingPeriod = 1
+
+dingScale :: Float
+dingScale = 0.25
+
+dingPosition :: Point
+dingPosition = (fst boardMin + 5, snd boardMax - 20)
 
 clientMain :: HostName -> IO ()
 clientMain hostname =
@@ -47,7 +55,10 @@ getInitialWorld h =
 
 initClientWorld :: [(Point, Vector)] -> World
 initClientWorld poss =
-  World { worldNpcs = zipWith initClientNPC [0..] poss }
+  World { worldNpcs = zipWith initClientNPC [0..] poss
+        , dingTimers = []
+        , worldMessage = ""
+        }
 
 runGame :: Handle -> MVar World -> IO ()
 runGame h var =
@@ -62,7 +73,35 @@ runGame h var =
   where (width,height) = subPt boardMax boardMin
 
 drawWorld      :: World -> Picture
-drawWorld w     = pictures (borderPicture : map drawNPC (worldNpcs w))
+drawWorld w     = pictures
+                $ borderPicture
+                : dingPicture (length (dingTimers w))
+                : messagePicture (worldMessage w)
+                : map drawPillar pillars
+               ++ map drawNPC (worldNpcs w)
+
+messagePicture :: String -> Picture
+messagePicture msg
+  = translate (fst boardMin + 5) (snd boardMin + 5)
+  $ scale 0.25 0.25
+  $ color white
+  $ text msg
+  
+
+dingPicture :: Int -> Picture
+dingPicture n =
+  pictures [ translate (fst dingPosition) (snd dingPosition)
+           $ translate (5 * fromIntegral i) (- 5 * fromIntegral i)
+           $ scale dingScale dingScale
+           $ color white
+           $ text "DING"
+           | i <- [0..n-1]]
+
+drawPillar :: Point -> Picture
+drawPillar (x,y)
+  = translate x y
+  $ color blue
+  $ rectangleWire pillarSize pillarSize
 
 borderPicture  :: Picture
 borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
@@ -118,7 +157,8 @@ inputEvent _ _ () = return ()
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld t w =
-  w { worldNpcs = map (fst . updateNPC' t) $ worldNpcs w }
+  w { worldNpcs = map (fst . updateNPC' t) $ worldNpcs w
+    , dingTimers = filter (> 0) $ map (subtract t) $ dingTimers w }
 
 clientUpdates :: Handle -> MVar World -> IO ()
 clientUpdates h var = forever $
@@ -127,7 +167,8 @@ clientUpdates h var = forever $
        ServerCommand name cmd ->
          modifyMVar_ var $ \w ->
            return $ w { worldNpcs = updateList name (npcCommand cmd) $ worldNpcs w }
-       ServerMessage txt -> putStrLn txt
+       ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessage = txt }
+       ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
        _ -> return ()
   where
   npcCommand cmd npc = case cmd of

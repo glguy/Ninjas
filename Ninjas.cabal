@@ -22,5 +22,6 @@ executable Ninjas
                        bytestring   ==0.9.*,
                        gloss        ==1.7.*,
                        network      ==2.3.*,
-                       random       ==1.0.*
+                       random       ==1.0.*,
+                       time
   ghc-options:         -Wall

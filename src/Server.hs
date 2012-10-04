@@ -8,13 +8,14 @@ import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
 import Network
 import System.IO
+import Data.Time.Clock
 
 import Simulation
 import NetworkMessages
 import ListUtils
 
 npcCount :: Int
-npcCount = 1
+npcCount = 10
 
 serverMain :: Int -> IO ()
 serverMain n = do
@@ -56,7 +57,7 @@ clientSocketLoop i hs h var = forever $
            updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
 
        in case cmd of
-            _        | isStuckPlayer me -> (w,[])
+            _        | not (serverActive w) || isStuckPlayer me -> (w,[])
             Move pos0 ->
               let pos = constrainPoint (npcPos (playerNpc me)) pos0
               in if pointInBox pos boardMin boardMax
@@ -90,9 +91,14 @@ getConnections s = aux []
 
 runServer :: [Handle] -> MVar ServerWorld -> IO a
 runServer hs w = forever $
-  do threadDelay (1000000 `div` eventsPerSecond)
+  do 
      let period = recip $ fromIntegral eventsPerSecond
+     before <- getCurrentTime
      modifyMVar_ w $ updateServerWorld hs period
+     after  <- getCurrentTime
+     let delayUs :: Float
+         delayUs = 1000000 * realToFrac (diffUTCTime after before)
+     threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - delayUs
 
 announce :: ServerCommand -> [Handle] -> IO ()
 announce msg hs = mapM_ (`hPutServerCommand` msg) hs
@@ -101,21 +107,36 @@ initServerWorld :: Int -> [String] -> IO ServerWorld
 initServerWorld playerCount names =
   do serverPlayers <- zipWithM initPlayer [0 ..] names
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
+     let serverActive = True
      return ServerWorld { .. }
 
 updateServerWorld    :: [Handle] -> Float -> ServerWorld -> IO ServerWorld
-updateServerWorld hs t w =
-  do pcs'  <- mapM (updatePlayer hs t)   $ serverPlayers w
-     npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
-     return w { serverPlayers = pcs'
-              , serverNpcs    = npcs'
-              }
+updateServerWorld hs t w
+  | not (serverActive w) = return w
+  | otherwise =
+     do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
+   
+        let winners = filter isWinner pcs'
+        unless (null winners) $
+               announce (ServerMessage ("Winner! " ++ show (map playerUsername winners))) hs
+        npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
+        return w { serverPlayers = pcs'
+                 , serverNpcs    = npcs'
+                 , serverActive  = null winners
+                 }
 
 updatePlayer :: [Handle] -> Float -> Player -> IO Player
 updatePlayer hs t p =
   do npc' <- updateNPC hs t False $ playerNpc p
-     return p { playerNpc = npc' }
+     let p' = p { playerNpc = npc' }
+     case whichPillar (npcPos npc') of
+       Just i | i `notElem` playerVisited p -> 
+         do announce ServerDing hs
+            return p' { playerVisited = i : playerVisited p' }
+       _ -> return p'
 
+isWinner :: Player -> Bool
+isWinner p = length (playerVisited p) == length pillars
 
 updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
