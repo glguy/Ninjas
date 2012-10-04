@@ -15,7 +15,7 @@ cabal-version:       >=1.8
 
 executable Ninjas
   main-is:             Main.hs
-  other-modules:       NetworkMessages
+  other-modules:       ListUtils, Server, Simulation, Client, NetworkMessages
   hs-source-dirs:      src
   build-depends:       base         ==4.5.*,
                        binary       ==0.5.*,
@@ -23,3 +23,4 @@ executable Ninjas
                        gloss        ==1.7.*,
                        network      ==2.3.*,
                        random       ==1.0.*
+  ghc-options:         -Wall

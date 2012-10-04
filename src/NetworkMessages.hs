@@ -1,13 +1,15 @@
 module NetworkMessages where
 
 import Control.Monad
-import Data.Int
 import Data.Binary
-import Data.Binary.Put
-import Data.Binary.Get
-import System.IO
+import Data.Int
 import Graphics.Gloss.Data.Picture
+import Network (PortID(PortNumber))
+import System.IO
 import qualified Data.ByteString.Lazy as B
+
+gamePort :: PortID
+gamePort = PortNumber 16000
 
 data Command
   = Move Point
