@@ -169,7 +169,9 @@ stunnedNPC npc = waitingNPC npc (Just stunTime) True
 attackNPC :: NPC -> NPC
 attackNPC npc = npc { npcState = Attacking attackDelay }
 
-performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [ServerCommand], [(Int, String)])
+performAttack ::
+  Player -> [Player] -> [NPC] ->
+  (Player, [Player], [NPC], [ServerCommand], [(Int, String)])
 performAttack attacker players npcs =
   ( mapPlayerNpc attackNPC attacker
   , players'
@@ -193,7 +195,8 @@ performAttack attacker players npcs =
     attackVector1  = mulSV (recip attackLen) attackVector
 
   checkKill player
-    | affected npc = ( player { playerNpc = deadNPC npc }
+    | npcState npc /= Dead && affected npc
+          = ( player { playerNpc = deadNPC npc }
                      , Just (ServerCommand (npcName npc) Die)
                      , Just (npcName npc, playerUsername attacker)
                      )

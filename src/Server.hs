@@ -4,8 +4,9 @@ module Server (serverMain) where
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Data.List (intercalate)
+import Data.List (intercalate, sortBy)
 import Data.Foldable (for_)
+import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
@@ -186,7 +187,7 @@ updateServerWorld hs t w
                             $ commas (map playerUsername winners) ++ " wins " ++ reason
                    announce hs
                       $ ServerMessage
-                      $ commas $ map prettyScore ps
+                      $ commas $ map prettyScore $ reverse $ sortBy (compare `on` playerScore) ps
                    return ps
 
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
