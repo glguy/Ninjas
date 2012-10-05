@@ -167,18 +167,18 @@ updateServerWorld hs t w
      do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
 
         let survivors = filter (not . (Dead ==) . npcState . playerNpc) pcs'
-            winners = case (survivors, pcs') of
+            (winners, reason) = case (survivors, pcs') of
               -- This match on pcs' ensures single-player
               -- games don't immediately terminate
-              ([_],(_:_:_)) -> survivors
-              _             -> filter isWinner pcs'
+              ([_],(_:_:_)) -> (survivors, "by murder!")
+              _             -> (filter isWinner pcs', "by capturing the diamonds!")
 
         pcs2 <-
          if null winners
            then return pcs'
            else do let ps = map (addVictory winners) pcs'
                    announce hs $ ServerMessage
-                            $ commas (map playerUsername winners) ++ " wins!"
+                            $ commas (map playerUsername winners) ++ " wins " ++ reason
                    announce hs
                       $ ServerMessage
                       $ commas $ map prettyScore $ reverse $ sortBy (compare `on` playerScore) ps
