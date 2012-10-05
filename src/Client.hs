@@ -52,13 +52,17 @@ clientMain hostname =
      _ <- forkIO $ clientUpdates h r
      runGame h r
 
+serverWaitingMessage :: Int -> String
+serverWaitingMessage n =
+  "Server waiting for " ++ show n ++ " more ninja" ++ if (n > 1) then "s." else "."
+
 getInitialWorld :: Handle -> IO [(Point,Vector)]
 getInitialWorld h =
   do msg <- hGetServerCommand h
      case msg of
        SetWorld poss -> return poss
        ServerWaiting n ->
-         do putStrLn $ "Server waiting for " ++ show n ++ " more clients"
+         do putStrLn $ serverWaitingMessage n
             getInitialWorld h
        _ -> fail "Unexpected initial message"
 
