@@ -199,6 +199,7 @@ clientUpdates :: Handle -> MVar World -> IO ()
 clientUpdates h var = forever $
   do c <- hGetServerCommand h
      case c of
+       ServerReady -> modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
        ServerCommand name cmd ->
          modifyMVar_ var $ \w ->
            return $ w { worldNpcs = updateList name (npcCommand cmd) $ worldNpcs w }

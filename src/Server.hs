@@ -32,9 +32,20 @@ serverMain n = do
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
        forkIO $ clientSocketLoop i hs h var
+
+    readyCountdown hs var
+
     runServer hs var
   _ <- getLine
   return ()
+
+readyCountdown :: Handles -> MVar ServerWorld -> IO ()
+readyCountdown hs var =
+  do forM_ [3,2,1::Int] $ \i ->
+       do announce hs $ ServerMessage $ show i
+          threadDelay 1000000
+     announce hs ServerReady
+     modifyMVar_ var $ \w -> return w { serverActive = True }
 
 generateSetWorld :: ServerWorld -> ServerCommand
 generateSetWorld w = SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w]
@@ -120,7 +131,7 @@ initServerWorld :: Int -> [String] -> IO ServerWorld
 initServerWorld playerCount names =
   do serverPlayers <- zipWithM initPlayer [0 ..] names
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
-     let serverActive = True
+     let serverActive = False
      return ServerWorld { .. }
 
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld

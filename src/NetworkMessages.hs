@@ -32,6 +32,7 @@ data ServerCommand
   | ServerMessage String
   | ServerSmoke Point
   | ServerDing
+  | ServerReady
   deriving (Show, Read)
 
 hGetClientCommand :: Handle -> IO ClientCommand
@@ -117,6 +118,7 @@ getServerCommand =
        4 -> return ServerMessage `ap` get
        5 -> return ServerDing
        6 -> return ServerSmoke   `ap` get
+       7 -> return ServerReady
        _ -> error ("getServerCommand: bad tag " ++ show tag)
 
 putServerCommand :: ServerCommand -> Put
@@ -128,3 +130,4 @@ putServerCommand cmd =
     ServerMessage txt -> putWord8 4 >> put txt
     ServerDing        -> putWord8 5
     ServerSmoke pt    -> putWord8 6 >> put pt
+    ServerReady       -> putWord8 7
