@@ -2,10 +2,11 @@ module Client (clientMain) where
 
 import Control.Concurrent
 import Control.Monad
+import Data.Maybe (fromMaybe)
 import Graphics.Gloss.Interface.IO.Game
 import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
-import System.Environment
+import System.Environment (getEnvironment)
 import System.IO
 import Network
 import NetworkMessages
@@ -43,7 +44,7 @@ clientMain hostname =
   do h <- connectTo hostname gamePort
      hSetBuffering h LineBuffering
 
-     name <- getEnv "USER"
+     name <- getUsername
      hPutClientCommand h (ClientJoin name)
 
      poss <- getInitialWorld h
@@ -230,3 +231,9 @@ clientUpdates h var = forever $
     Stun     -> stunnedNPC npc
     Die      -> deadNPC npc
     Attack   -> attackNPC npc
+
+getUsername :: IO String
+getUsername =
+  do env <- getEnvironment
+     return $ fromMaybe "Anon"
+            $ lookup "USER" env `mplus` lookup "USERNAME" env
