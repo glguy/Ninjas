@@ -158,9 +158,11 @@ updateServerWorld hs t w
      do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
 
         let survivors = filter (not . (Dead ==) . npcState . playerNpc) pcs'
-            winners = case survivors of
-              [_] -> survivors
-              _   -> filter isWinner pcs'
+            winners = case (survivors, pcs') of
+              -- This match on pcs' ensures single-player
+              -- games don't immediately terminate
+              ([_],(_:_:_)) -> survivors
+              _             -> filter isWinner pcs'
 
         pcs2 <-
          if null winners
