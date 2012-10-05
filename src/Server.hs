@@ -50,33 +50,40 @@ isStuckPlayer p =
 
 clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
-  do ClientCommand cmd <- hGetClientCommand h
-     putStrLn $ "Client command: " ++ show cmd
+  do msg  <- hGetClientCommand h
      msgs <- modifyMVar var $ \w -> return $
        let players = serverPlayers w
            (me,them) = extract i players
-           updatePlayerNpc f = w { serverPlayers = updateList i (mapPlayerNpc f) (serverPlayers w) }
+           updatePlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
+           updatePlayerNpc f = updatePlayer (mapPlayerNpc f)
 
-       in case cmd of
+       in case msg of
             _        | not (serverActive w) || isStuckPlayer me -> (w,[])
-            Move _ pos0 ->
-              -- Disregard where the player says he is moving from
-              let pos = constrainPoint (npcPos (playerNpc me)) pos0
-              in if pointInBox pos boardMin boardMax
-                 then   ( updatePlayerNpc $ \npc -> walkingNPC npc pos
-                        , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
-                        )
-                 else   (w, [])
-            Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
-                        , [ServerCommand i cmd]
-                        )
-            Attack   -> let (me', them', npcs', cmds) = performAttack me them (serverNpcs w)
-                        in  (w { serverPlayers = insertPlayer me' them'
-                               , serverNpcs    = npcs'
-                               }
-                            , cmds
-                            )
-            _        -> (w,[])
+            ClientSmoke
+              | playerSmokes me <= 0 -> (w,[])
+              | otherwise ->
+                   (updatePlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
+                   , [ServerSmoke (npcPos (playerNpc me))]
+                   )
+            ClientCommand cmd -> case cmd of
+              Move _ pos0 ->
+                -- Disregard where the player says he is moving from
+                let pos = constrainPoint (npcPos (playerNpc me)) pos0
+                in if pointInBox pos boardMin boardMax
+                   then   ( updatePlayerNpc $ \npc -> walkingNPC npc pos
+                          , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
+                          )
+                   else   (w, [])
+              Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
+                          , [ServerCommand i cmd]
+                          )
+              Attack   -> let (me', them', npcs', cmds) = performAttack me them (serverNpcs w)
+                          in  (w { serverPlayers = insertPlayer me' them'
+                                 , serverNpcs    = npcs'
+                                 }
+                              , cmds
+                              )
+              _        -> (w,[])
      forM_ msgs $ \msg -> announce msg hs
 
 getConnections :: Socket -> Int -> IO (Handles,[String])

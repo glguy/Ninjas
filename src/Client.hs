@@ -13,16 +13,23 @@ import NetworkMessages
 import ListUtils
 import Simulation
 
-moveButton, stopButton, attackButton :: Key
+moveButton, stopButton, attackButton, smokeButton :: Key
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 attackButton = Char 'a'
+smokeButton  = Char 's'
 
 windowPadding :: Int
 windowPadding = 60
 
 dingPeriod :: Float
 dingPeriod = 1
+
+smokePeriod :: Float
+smokePeriod = 5
+
+smokeRadius :: Float
+smokeRadius = 125
 
 dingScale :: Float
 dingScale = 0.25
@@ -57,6 +64,7 @@ initClientWorld :: [(Point, Vector)] -> World
 initClientWorld poss =
   World { worldNpcs = zipWith initClientNPC [0..] poss
         , dingTimers = []
+        , smokeTimers = []
         , worldMessage = ""
         }
 
@@ -79,6 +87,25 @@ drawWorld w     = pictures
                 : messagePicture (worldMessage w)
                 : map drawPillar pillars
                ++ map drawNPC (worldNpcs w)
+               ++ map drawSmoke (smokeTimers w)
+
+drawSmoke :: (Float, Point) -> Picture
+drawSmoke (t, pt)
+  = translate (fst pt) (snd pt)
+  $ rotate (radToDeg t)
+  $ scale scalar scalar
+  $ pictures
+      [ color (greyN 0.1 ) $ circleSolid 1
+      , color (greyN 0.25)
+         $ pictures [ circle      1
+                    , line [ (0,1) , (0,-1)
+                           ]
+                    , line [ (1,0) , (-1,0)
+                           ]
+                    ]
+      ]
+  where
+  scalar = smokeRadius * sin (t / (smokePeriod / pi))
 
 messagePicture :: String -> Picture
 messagePicture msg
@@ -100,7 +127,7 @@ dingPicture n =
 drawPillar :: Point -> Picture
 drawPillar (x,y)
   = translate x y
-  $ color blue
+  $ color cyan
   $ rectangleWire pillarSize pillarSize
 
 borderPicture  :: Picture
@@ -138,7 +165,7 @@ drawNPC npc =
         attackArc
           | npcState npc == Dead = blank
           | otherwise
-              = color (greyN 0.5)
+              = color (greyN 0.2)
               $ pictures
                   [ scale attackDistance attackDistance wedge
                   , arcRad (negate attackAngle) attackAngle attackDistance
@@ -153,12 +180,15 @@ inputEvent h (EventKey k Down _ pos) ()
   | k == moveButton   = hPutClientCommand h (ClientCommand (Move (0,0) pos))
   | k == stopButton   = hPutClientCommand h (ClientCommand Stop      )
   | k == attackButton = hPutClientCommand h (ClientCommand Attack    )
+  | k == smokeButton  = hPutClientCommand h (ClientSmoke             )
 inputEvent _ _ () = return ()
 
 updateClientWorld :: Float -> World -> World
-updateClientWorld t w =
-  w { worldNpcs = map (fst . updateNPC' t) $ worldNpcs w
-    , dingTimers = filter (> 0) $ map (subtract t) $ dingTimers w }
+updateClientWorld d w =
+  w { worldNpcs = map (fst . updateNPC' d) $ worldNpcs w
+    , dingTimers  = [ t - d      |  t     <- dingTimers  w, t > d]
+    , smokeTimers = [(t - d, pt) | (t,pt) <- smokeTimers w, t > d]
+    }
 
 clientUpdates :: Handle -> MVar World -> IO ()
 clientUpdates h var = forever $
@@ -169,6 +199,7 @@ clientUpdates h var = forever $
            return $ w { worldNpcs = updateList name (npcCommand cmd) $ worldNpcs w }
        ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessage = txt }
        ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
+       ServerSmoke pt    -> modifyMVar_ var $ \w -> return $ w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
        _ -> return ()
   where
   npcCommand cmd npc = case cmd of

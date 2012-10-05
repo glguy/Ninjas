@@ -59,6 +59,7 @@ data Player   = Player
   { playerNpc      :: NPC
   , playerUsername :: String
   , playerVisited  :: [Int]
+  , playerSmokes   :: Int
   }
   deriving (Show, Read, Eq)
 
@@ -82,6 +83,7 @@ data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
 data World = World
   { worldNpcs        :: [NPC]
   , dingTimers       :: [Float]
+  , smokeTimers      :: [(Float, Point)]
   , worldMessage     :: String
   }
 
@@ -99,7 +101,7 @@ updateNPC' elapsed npc =
     Walking w
       | npcDist w < speed -> done ChooseWait
       | otherwise -> working (Walking w { npcDist = npcDist w - speed })
-                             npc { npcPos = addPt (npcVelocity w) (npcPos npc) }
+                             npc { npcPos = addPt (mulSV (elapsed / expected) (npcVelocity w)) (npcPos npc) }
 
     Waiting w ->
       case npcWaiting w of
@@ -236,6 +238,7 @@ initPlayer :: Int -> String -> IO Player
 initPlayer name playerUsername =
   do playerNpc <- initServerNPC False name
      let playerVisited = []
+         playerSmokes  = 1
      return Player { .. }
 
 pickWaitTime :: Bool -> IO (Maybe Float)

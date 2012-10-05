@@ -21,6 +21,7 @@ data Command
 
 data ClientCommand
   = ClientCommand Command
+  | ClientSmoke
   | ClientJoin String
   deriving (Show, Read, Eq)
   
@@ -29,6 +30,7 @@ data ServerCommand
   | SetWorld [(Point,Vector)]
   | ServerWaiting Int
   | ServerMessage String
+  | ServerSmoke Point
   | ServerDing
   deriving (Show, Read)
 
@@ -94,6 +96,7 @@ putClientCommand cmd =
   case cmd of
     ClientCommand c -> putWord8 1 >> put c
     ClientJoin name -> putWord8 2 >> put name
+    ClientSmoke     -> putWord8 3
 
 getClientCommand :: Get ClientCommand
 getClientCommand =
@@ -101,6 +104,7 @@ getClientCommand =
      case tag of
        1 -> return ClientCommand `ap` get
        2 -> return ClientJoin    `ap` get
+       3 -> return ClientSmoke
        _ -> error ("getClientCommand: bad tag " ++ show tag)
 
 getServerCommand :: Get ServerCommand
@@ -112,6 +116,7 @@ getServerCommand =
        3 -> return ServerWaiting `ap` get
        4 -> return ServerMessage `ap` get
        5 -> return ServerDing
+       6 -> return ServerSmoke   `ap` get
        _ -> error ("getServerCommand: bad tag " ++ show tag)
 
 putServerCommand :: ServerCommand -> Put
@@ -122,3 +127,4 @@ putServerCommand cmd =
     ServerWaiting i   -> putWord8 3 >> put i
     ServerMessage txt -> putWord8 4 >> put txt
     ServerDing        -> putWord8 5
+    ServerSmoke pt    -> putWord8 6 >> put pt
