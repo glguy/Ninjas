@@ -87,7 +87,7 @@ drawWorld w     = pictures
                 : dingPicture (length (dingTimers w))
                 : messagePictures (worldMessages w)
                 : map drawPillar pillars
-               ++ map drawNPC (worldNpcs w)
+               ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
 
 drawSmoke :: (Float, Point) -> Picture
@@ -106,7 +106,10 @@ drawSmoke (t, pt)
                     ]
       ]
   where
-  scalar = smokeRadius * sin (t / (smokePeriod / pi))
+  scalar = smokeRadiusScalar t
+
+smokeRadiusScalar :: Float -> Float
+smokeRadiusScalar t = smokeRadius * sin (t / (smokePeriod / pi))
 
 messagePictures :: [String] -> Picture
 messagePictures msgs = pictures (zipWith messagePicture [0..] msgs)
@@ -115,10 +118,11 @@ messagePicture :: Int -> String -> Picture
 messagePicture i msg
   = translate (fst boardMin + 5) (snd boardMin + 5 + textHeight * fromIntegral i)
   $ scale 0.25 0.25
-  $ color white
+  $ color (greyN gray)
   $ text msg
   where
   textHeight = 40
+  gray = (4 - fromIntegral (min 3 i)) / 4
   
 
 dingPicture :: Int -> Picture
@@ -140,17 +144,20 @@ borderPicture  :: Picture
 borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
-drawNPC :: NPC -> Picture
-drawNPC npc =
+drawNPC :: [(Float, Point)] -> NPC -> Picture
+drawNPC smokes npc =
   let state = npcState npc
   in  translate x y
     $ rotate (negate $ radToDeg rads)
     $ color (c state)
-    $ pictures [ attackArc
+    $ pictures [ if covered then blank else attackArc
                , circle ninjaRadius
                , scale ninjaRadius ninjaRadius wedge
                ]
   where
+        smokeCovering (t,pt) = magV (subPt pt (npcPos npc)) + ninjaRadius <= smokeRadiusScalar t
+        covered = any smokeCovering smokes
+
         (x,y) = npcPos npc
 
         c   Dead                       = red
