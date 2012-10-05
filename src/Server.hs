@@ -2,12 +2,15 @@
 module Server (serverMain) where
 
 import Control.Concurrent
+import Control.Exception
 import Control.Monad
 import Data.List (intercalate)
+import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
+import Prelude hiding (catch)
 import Network
 import System.IO
 
@@ -66,8 +69,13 @@ isStuckPlayer p =
     _             -> False
 
 clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h var = forever $
-  do msg  <- hGetClientCommand h
+clientSocketLoop i hs h var =
+  forever processOne
+  `catch` \ e ->
+  putStrLn $ "Read loop: Socket error ("++show (e :: IOException)++"), dropping connection"
+  where
+  processOne = do
+     msg  <- hGetClientCommand h
      join $ modifyMVar var $ \w ->
        let players = serverPlayers w
            (me,them) = extract i players
@@ -245,11 +253,22 @@ unsafeReadHandles :: Handles -> IO [(Int,Handle)]
 unsafeReadHandles (Handles var) = readMVar var
 
 announceOne :: Handles -> Int -> ServerCommand -> IO ()
-announceOne (Handles var) i msg = withMVar var $ \hs ->
-  case lookup i hs of
-    Just h  -> hPutServerCommand h msg
-    Nothing -> return ()    -- XXX: Perhaps say something here.
+announceOne (Handles var) i msg =
+  withMVar var             $ \hs ->
+  for_ (lookup i hs)       $ \h ->
+  handle ignoreIOException $
+  hPutServerCommand h msg
+  where
+  -- Dead handles get cleaned up in 'announce'
+  ignoreIOException :: IOException -> IO ()
+  ignoreIOException _ = return ()
 
 announce :: Handles -> ServerCommand -> IO ()
-announce (Handles var) msg = withMVar var $ \hs ->
-  mapM_ (`hPutServerCommand` msg) (map snd hs)
+announce (Handles var) msg =
+  modifyMVar_ var  $ \hs ->
+  flip filterM hs  $ \(_name,h) ->
+     do hPutServerCommand h msg
+        return True
+      `catch` \ e ->
+     do putStrLn $ "announce: Socket error ("++show (e :: IOException)++"), dropping connection"
+        return False

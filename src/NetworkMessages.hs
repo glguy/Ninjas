@@ -57,9 +57,16 @@ hPutCmd h x =
 
 hGetCmd :: Binary a => Handle -> IO a
 hGetCmd h =
-  do n <- decode `fmap` B.hGet h 8
+  do n <- decode `fmap` hGetExact h 8
      bs <- B.hGet h (fromIntegral (n :: Int64))
      return $ decode bs
+
+hGetExact :: Handle -> Int -> IO B.ByteString
+hGetExact h n =
+  do bs <- B.hGet h n
+     if B.length bs == fromIntegral n
+       then return bs
+       else fmap (B.append bs) (hGetExact h n)
 
 instance Binary Command where
   put = putCommand
