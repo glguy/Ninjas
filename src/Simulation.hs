@@ -84,7 +84,7 @@ data World = World
   { worldNpcs        :: [NPC]
   , dingTimers       :: [Float]
   , smokeTimers      :: [(Float, Point)]
-  , worldMessage     :: String
+  , worldMessages    :: [String]
   }
 
 data ServerWorld = ServerWorld

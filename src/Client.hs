@@ -64,8 +64,8 @@ initClientWorld :: [(Point, Vector)] -> World
 initClientWorld poss =
   World { worldNpcs = zipWith initClientNPC [0..] poss
         , dingTimers = []
+        , worldMessages = []
         , smokeTimers = []
-        , worldMessage = ""
         }
 
 runGame :: Handle -> MVar World -> IO ()
@@ -84,7 +84,7 @@ drawWorld      :: World -> Picture
 drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
-                : messagePicture (worldMessage w)
+                : messagePictures (worldMessages w)
                 : map drawPillar pillars
                ++ map drawNPC (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
@@ -107,12 +107,17 @@ drawSmoke (t, pt)
   where
   scalar = smokeRadius * sin (t / (smokePeriod / pi))
 
-messagePicture :: String -> Picture
-messagePicture msg
-  = translate (fst boardMin + 5) (snd boardMin + 5)
+messagePictures :: [String] -> Picture
+messagePictures msgs = pictures (zipWith messagePicture [0..] msgs)
+
+messagePicture :: Int -> String -> Picture
+messagePicture i msg
+  = translate (fst boardMin + 5) (snd boardMin + 5 + textHeight * fromIntegral i)
   $ scale 0.25 0.25
   $ color white
   $ text msg
+  where
+  textHeight = 40
   
 
 dingPicture :: Int -> Picture
@@ -197,7 +202,7 @@ clientUpdates h var = forever $
        ServerCommand name cmd ->
          modifyMVar_ var $ \w ->
            return $ w { worldNpcs = updateList name (npcCommand cmd) $ worldNpcs w }
-       ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessage = txt }
+       ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessages = txt : worldMessages w }
        ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
        ServerSmoke pt    -> modifyMVar_ var $ \w -> return $ w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
        _ -> return ()
