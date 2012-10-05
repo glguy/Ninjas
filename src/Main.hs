@@ -8,12 +8,15 @@ import Client (clientMain)
 import Server (serverMain)
 
 --------------------------------------------------------------------------------
+npcCountDefault :: Int
+npcCountDefault = 10
 
 main :: IO ()
 main =
   do args <- getArgs
      case args of
-       ["server",n]        -> serverMain (read n)
+       ["server", playerCount]           -> serverMain (read playerCount) npcCountDefault
+       ["server", playerCount, npcCount] -> serverMain (read playerCount) (read npcCount)
        ["client"]          -> clientMain "localhost"
        ["client",hostname] -> clientMain hostname
        _ -> do putStrLn "Server usage: Main server NUM_CLIENTS"

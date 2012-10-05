@@ -19,23 +19,21 @@ import Simulation
 import NetworkMessages
 import ListUtils
 
-npcCount :: Int
-npcCount = 10
-
-serverMain :: Int -> IO ()
-serverMain n = do
+serverMain :: Int -> Int -> IO ()
+serverMain numPlayers npcCount = do
   sock <- listenOn gamePort
+  putStrLn $ "Server listening for ninjas on " ++ (showPort gamePort) ++ "."
   _ <- forkIO $ do
-    (hs, names) <- getConnections sock n
+    (hs, names) <- getConnections sock numPlayers
     sClose sock
 
-    (w,msgs) <- newGame [ (p,0) | p <- names ]
+    (w,msgs) <- newGame [ (p,0) | p <- names ] npcCount
     var <- newMVar w
 
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop i hs h var
+       forkIO $ clientSocketLoop i hs h var npcCount
 
     mapM_ (announce hs) msgs
 
@@ -46,17 +44,22 @@ serverMain n = do
   _ <- getLine
   return ()
 
+showPort :: PortID-> String
+showPort (Service s) = "service " ++ s
+showPort (PortNumber n) = "port " ++ show n
+showPort (UnixSocket s) = "socket " ++ s
+
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
-  do forM_ [3,2,1::Int] $ \i ->
-       do announce hs $ ServerMessage $ show i
+  do forM_ ["3","2","1", "Capture the Diamonds!"] $ \i ->
+       do announce hs $ ServerMessage i
           threadDelay 1000000
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
 
-newGame :: [(String,Int)] -> IO (ServerWorld, [ServerCommand])
-newGame scores =
-  do w   <- initServerWorld scores
+newGame :: [(String,Int)] -> Int -> IO (ServerWorld, [ServerCommand])
+newGame scores npcCount =
+  do w   <- initServerWorld scores npcCount
      return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
@@ -69,8 +72,8 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h var =
+clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> Int -> IO ()
+clientSocketLoop i hs h var npcCount =
   forever processOne
   `catch` \ e ->
   putStrLn $ "Read loop: Socket error ("++show (e :: IOException)++"), dropping connection"
@@ -85,7 +88,7 @@ clientSocketLoop i hs h var =
 
        in case msg of
             NewGame | serverMode w == Stopped ->
-                        do (w',m) <- newGame $ serverScores w
+                        do (w',m) <- newGame (serverScores w) npcCount
                            returnAnd w' $ do forM_ m $ announce hs
                                              readyCountdown hs var
 
@@ -152,8 +155,8 @@ runServer hs w = loop =<< getCurrentTime
        threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
        loop thisTime
 
-initServerWorld :: [(String,Int)] -> IO ServerWorld
-initServerWorld scores =
+initServerWorld :: [(String,Int)] -> Int -> IO ServerWorld
+initServerWorld scores npcCount =
   do let playerCount = length scores
      serverPlayers <- zipWithM initPlayer [0 ..] scores
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
