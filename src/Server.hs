@@ -24,18 +24,21 @@ serverMain n = do
   _ <- forkIO $ do
     (hs, names) <- getConnections sock n
     sClose sock
-    w   <- initServerWorld n names
+
+    (w,msgs) <- newGame names
     var <- newMVar w
-    let setCommand = generateSetWorld w
-    announce hs setCommand
+
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop i hs h var
+       forkIO $ clientSocketLoop names i hs h var
+
+    mapM_ (announce hs) msgs
 
     readyCountdown hs var
 
     runServer hs var
+
   _ <- getLine
   return ()
 
@@ -47,8 +50,10 @@ readyCountdown hs var =
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverActive = True }
 
-generateSetWorld :: ServerWorld -> ServerCommand
-generateSetWorld w = SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w]
+newGame :: [String] -> IO (ServerWorld, [ServerCommand])
+newGame names =
+  do w   <- initServerWorld names
+     return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
 allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
@@ -60,45 +65,53 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h var = forever $
+clientSocketLoop :: [String] -> Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop names i hs h var = forever $
   do msg  <- hGetClientCommand h
-     (msgs,kills) <- modifyMVar var $ \w -> return $
+     (msgs,kills,needsCountdown) <- modifyMVar var $ \w ->
        let players = serverPlayers w
            (me,them) = extract i players
            mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
 
        in case msg of
-            _        | not (serverActive w) || isStuckPlayer me -> (w,([],[]))
+            NewGame | not (serverActive w) -> do (w',m) <- newGame names
+                                                 return (w',(m,[],True))
+
+            _       | not (serverActive w) || isStuckPlayer me -> return (w,([],[],False))
+
             ClientSmoke
-              | playerSmokes me <= 0 -> (w,([],[]))
-              | otherwise ->
+              | playerSmokes me <= 0 -> return (w,([],[],False))
+              | otherwise -> return
                    (mapPlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
-                   , ([ServerSmoke (npcPos (playerNpc me))], [])
+                   , ([ServerSmoke (npcPos (playerNpc me))],[],False)
                    )
-            ClientCommand cmd -> case cmd of
+
+            ClientCommand cmd -> return $ case cmd of
               Move _ pos0 ->
                 -- Disregard where the player says he is moving from
                 let pos = constrainPoint (npcPos (playerNpc me)) pos0
                 in if pointInBox pos boardMin boardMax
                    then   ( mapPlayer $ mapPlayerNpc $ \npc -> walkingNPC npc pos
-                          , ([ServerCommand i (Move (npcPos (playerNpc me)) pos)], [])
+                          , ([ServerCommand i (Move (npcPos (playerNpc me)) pos)], [], False)
                           )
-                   else   (w, ([],[]))
+                   else   (w, ([],[],False))
+
               Stop     -> ( mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
-                          , ([ServerCommand i cmd], [])
+                          , ([ServerCommand i cmd], [], False)
                           )
               Attack   -> let (me', them', npcs', cmds, kills) = performAttack me them (serverNpcs w)
                           in  (w { serverPlayers = insertPlayer me' them'
                                  , serverNpcs    = npcs'
                                  }
-                              , (cmds, kills)
+                              , (cmds, kills, False)
                               )
-              _        -> (w,([],[]))
-            _ -> (w,([],[]))
-     forM_ msgs $ \out -> announce hs out
+              _        -> (w,([],[],False))
+            _ -> return (w,([],[],False))
+     forM_ msgs  $ announce hs
      forM_ kills $ \(killed,killer) ->
        announceOne hs killed (ServerMessage ("Killed by " ++ killer))
+     when needsCountdown
+       $ readyCountdown hs var
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
@@ -127,9 +140,10 @@ runServer hs w = loop =<< getCurrentTime
        threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
        loop thisTime
 
-initServerWorld :: Int -> [String] -> IO ServerWorld
-initServerWorld playerCount names =
-  do serverPlayers <- zipWithM initPlayer [0 ..] names
+initServerWorld :: [String] -> IO ServerWorld
+initServerWorld names =
+  do let playerCount = length names
+     serverPlayers <- zipWithM initPlayer [0 ..] names
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
      let serverActive = False
      return ServerWorld { .. }
@@ -211,4 +225,3 @@ announceOne (Handles var) i msg = withMVar var $ \hs ->
 announce :: Handles -> ServerCommand -> IO ()
 announce (Handles var) msg = withMVar var $ \hs ->
   mapM_ (`hPutServerCommand` msg) (map snd hs)
-

@@ -23,6 +23,7 @@ data ClientCommand
   = ClientCommand Command
   | ClientSmoke
   | ClientJoin String
+  | NewGame
   deriving (Show, Read, Eq)
   
 data ServerCommand
@@ -98,6 +99,7 @@ putClientCommand cmd =
     ClientCommand c -> putWord8 1 >> put c
     ClientJoin name -> putWord8 2 >> put name
     ClientSmoke     -> putWord8 3
+    NewGame         -> putWord8 4
 
 getClientCommand :: Get ClientCommand
 getClientCommand =
@@ -106,6 +108,7 @@ getClientCommand =
        1 -> return ClientCommand `ap` get
        2 -> return ClientJoin    `ap` get
        3 -> return ClientSmoke
+       4 -> return NewGame
        _ -> error ("getClientCommand: bad tag " ++ show tag)
 
 getServerCommand :: Get ServerCommand
