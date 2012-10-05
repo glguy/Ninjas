@@ -13,11 +13,12 @@ import NetworkMessages
 import ListUtils
 import Simulation
 
-moveButton, stopButton, attackButton, smokeButton :: Key
+moveButton, stopButton, attackButton, smokeButton, newGameButton :: Key
 moveButton = MouseButton LeftButton
 stopButton = MouseButton RightButton
 attackButton = Char 'a'
 smokeButton  = Char 's'
+newGameButton = Char 'n'
 
 windowPadding :: Int
 windowPadding = 60
@@ -186,6 +187,7 @@ inputEvent h (EventKey k Down _ pos) ()
   | k == stopButton   = hPutClientCommand h (ClientCommand Stop      )
   | k == attackButton = hPutClientCommand h (ClientCommand Attack    )
   | k == smokeButton  = hPutClientCommand h (ClientSmoke             )
+  | k == newGameButton = hPutClientCommand h NewGame
 inputEvent _ _ () = return ()
 
 updateClientWorld :: Float -> World -> World
@@ -205,6 +207,8 @@ clientUpdates h var = forever $
        ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessages = txt : worldMessages w }
        ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
        ServerSmoke pt    -> modifyMVar_ var $ \w -> return $ w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
+       SetWorld poss ->
+        modifyMVar_ var $ \_ -> return $ initClientWorld poss
        _ -> return ()
   where
   npcCommand cmd npc = case cmd of
@@ -213,3 +217,7 @@ clientUpdates h var = forever $
     Stun     -> stunnedNPC npc
     Die      -> deadNPC npc
     Attack   -> attackNPC npc
+
+
+
+

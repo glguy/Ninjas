@@ -23,20 +23,25 @@ serverMain n = do
   _ <- forkIO $ do
     (hs, names) <- getConnections sock n
     sClose sock
-    w   <- initServerWorld n names
+
+    (w,msgs) <- newGame names
     var <- newMVar w
-    let setCommand = generateSetWorld w
-    announce setCommand hs
+
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop i hs h var
+       forkIO $ clientSocketLoop names i hs h var
+
+    mapM_ (`announce` hs) msgs
     runServer hs var
+
   _ <- getLine
   return ()
 
-generateSetWorld :: ServerWorld -> ServerCommand
-generateSetWorld w = SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w]
+newGame :: [String] -> IO (ServerWorld, [ServerCommand])
+newGame names =
+  do w   <- initServerWorld names
+     return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
 allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
@@ -48,23 +53,27 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h var = forever $
+clientSocketLoop :: [String] -> Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop names i hs h var = forever $
   do msg  <- hGetClientCommand h
-     msgs <- modifyMVar var $ \w -> return $
+     msgs <- modifyMVar var $ \w ->
        let players = serverPlayers w
            (me,them) = extract i players
            mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
 
        in case msg of
-            _        | not (serverActive w) || isStuckPlayer me -> (w,[])
+            NewGame | not (serverActive w) -> newGame names
+
+            _       | not (serverActive w) || isStuckPlayer me -> return (w,[])
+
             ClientSmoke
-              | playerSmokes me <= 0 -> (w,[])
-              | otherwise ->
+              | playerSmokes me <= 0 -> return (w,[])
+              | otherwise -> return
                    (mapPlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
                    , [ServerSmoke (npcPos (playerNpc me))]
                    )
-            ClientCommand cmd -> case cmd of
+
+            ClientCommand cmd -> return $ case cmd of
               Move _ pos0 ->
                 -- Disregard where the player says he is moving from
                 let pos = constrainPoint (npcPos (playerNpc me)) pos0
@@ -73,6 +82,7 @@ clientSocketLoop i hs h var = forever $
                           , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
                           )
                    else   (w, [])
+
               Stop     -> ( mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
                           , [ServerCommand i cmd]
                           )
@@ -83,7 +93,7 @@ clientSocketLoop i hs h var = forever $
                               , cmds
                               )
               _        -> (w,[])
-            _ -> (w,[])
+            _ -> return (w,[])
      forM_ msgs $ \out -> announce out hs
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
@@ -113,9 +123,10 @@ runServer hs w = loop =<< getCurrentTime
        threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
        loop thisTime
 
-initServerWorld :: Int -> [String] -> IO ServerWorld
-initServerWorld playerCount names =
-  do serverPlayers <- zipWithM initPlayer [0 ..] names
+initServerWorld :: [String] -> IO ServerWorld
+initServerWorld names =
+  do let playerCount = length names
+     serverPlayers <- zipWithM initPlayer [0 ..] names
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
      let serverActive = True
      return ServerWorld { .. }
