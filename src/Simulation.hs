@@ -91,8 +91,11 @@ data World = World
 data ServerWorld = ServerWorld
   { serverNpcs    :: [NPC]
   , serverPlayers :: [Player]
-  , serverActive  :: Bool
+  , serverMode   :: ServerMode
   }
+
+data ServerMode = Playing | Starting | Stopped
+  deriving (Eq, Read, Show)
 
 data ThinkTask = ChooseWait | ChooseDestination
 
@@ -256,3 +259,9 @@ isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2) (x+pillarSize/
 
 whichPillar :: Point -> Maybe Int
 whichPillar p = findIndex (isInPillar p) pillars
+
+hasSmokebombs :: Player -> Bool
+hasSmokebombs p = playerSmokes p > 0
+
+consumeSmokebomb :: Player -> Player
+consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }
