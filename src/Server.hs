@@ -102,15 +102,15 @@ getConnections s n =
        aux hs (name:names) (i-1)
 
 runServer :: Handles -> MVar ServerWorld -> IO a
-runServer hs w = forever $
-  do 
-     let period = recip $ fromIntegral eventsPerSecond
-     before <- getCurrentTime
-     modifyMVar_ w $ updateServerWorld hs period
-     after  <- getCurrentTime
-     let delayUs :: Float
-         delayUs = 1000000 * realToFrac (diffUTCTime after before)
-     threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - delayUs
+runServer hs w = loop =<< getCurrentTime
+  where
+  loop lastTime =
+    do thisTime <- getCurrentTime
+       let elapsed :: Float
+           elapsed = realToFrac $ diffUTCTime thisTime lastTime
+       modifyMVar_ w $ updateServerWorld hs elapsed
+       threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
+       loop thisTime
 
 initServerWorld :: Int -> [String] -> IO ServerWorld
 initServerWorld playerCount names =

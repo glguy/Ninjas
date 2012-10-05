@@ -18,7 +18,7 @@ boardMax :: Point
 boardMax = (350,250)
 
 speed :: Float
-speed = 1
+speed = 100
 
 attackDelay :: Float
 attackDelay = 1
@@ -99,10 +99,11 @@ updateNPC' :: Float -> NPC -> (NPC, Maybe ThinkTask)
 updateNPC' elapsed npc =
   case state of
     Walking w
-      | npcDist w < speed -> done ChooseWait
-      | otherwise -> working (Walking w { npcDist = npcDist w - speed })
-                             npc { npcPos = addPt (npcVelocity w) (npcPos npc) }
+      | npcDist w < step -> done ChooseWait
+      | otherwise -> working (Walking w { npcDist = npcDist w - step })
+                             npc { npcPos = addPt (mulSV elapsed (npcVelocity w)) (npcPos npc) }
 
+      where step = elapsed * speed
     Waiting w ->
       case npcWaiting w of
         Nothing -> working state npc
@@ -118,7 +119,9 @@ updateNPC' elapsed npc =
 
     Dead -> (npc, Nothing)
 
-  where state = npcState npc
+  where 
+
+        state = npcState npc
 
         done next = (npc { npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False } }
                     , Just next)
