@@ -29,7 +29,7 @@ serverMain n = do
     announce setCommand hs
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
-    forM_ (zip [0..] rawHs) $ \(i,h) ->
+    forM_ rawHs $ \(i,h) ->
        forkIO $ clientSocketLoop i hs h var
     runServer hs var
   _ <- getLine
@@ -98,8 +98,9 @@ getConnections s n =
        hSetBuffering h LineBuffering
        ClientJoin name <- hGetClientCommand h
        putStrLn $ "Got connection from " ++ name ++ "@" ++ host ++ ":" ++ show port
-       addHandle h hs
-       aux hs (name:names) (i-1)
+       let i' = i - 1
+       addHandle i' h hs
+       aux hs (name:names) i'
 
 runServer :: Handles -> MVar ServerWorld -> IO a
 runServer hs w = loop =<< getCurrentTime
@@ -124,7 +125,7 @@ updateServerWorld hs t w
   | not (serverActive w) = return w
   | otherwise =
      do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
-   
+
         let survivors = filter (not . (Dead ==) . npcState . playerNpc) pcs'
             winners = case survivors of
               [_] -> survivors
@@ -178,14 +179,21 @@ constrainPoint from
   where
   aux f x p = fromMaybe p (f from p x)
 
-newtype Handles = Handles (MVar [Handle])
+newtype Handles = Handles (MVar [(Int,Handle)])
 
-addHandle :: Handle -> Handles -> IO ()
-addHandle h (Handles var) = modifyMVar_ var $ \hs -> return (h:hs)
+addHandle :: Int -> Handle -> Handles -> IO ()
+addHandle i h (Handles var) = modifyMVar_ var $ \hs -> return ((i,h):hs)
 
-unsafeReadHandles :: Handles -> IO [Handle]
+unsafeReadHandles :: Handles -> IO [(Int,Handle)]
 unsafeReadHandles (Handles var) = readMVar var
 
+announceOne :: Handles -> Int -> ServerCommand -> IO ()
+announceOne (Handles var) i msg = withMVar var $ \hs ->
+  case lookup i hs of
+    Just h  -> hPutServerCommand h msg
+    Nothing -> return ()    -- XXX: Perhaps say something here.
+
 announce :: ServerCommand -> Handles -> IO ()
-announce msg (Handles var) = withMVar var $ \hs -> mapM_ (`hPutServerCommand` msg) hs
+announce msg (Handles var) = withMVar var $ \hs ->
+  mapM_ (`hPutServerCommand` msg) (map snd hs)
 
