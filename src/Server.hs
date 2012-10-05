@@ -25,13 +25,13 @@ serverMain n = do
     (hs, names) <- getConnections sock n
     sClose sock
 
-    (w,msgs) <- newGame names
+    (w,msgs) <- newGame [ (p,0) | p <- names ]
     var <- newMVar w
 
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop names i hs h var
+       forkIO $ clientSocketLoop i hs h var
 
     mapM_ (announce hs) msgs
 
@@ -50,9 +50,9 @@ readyCountdown hs var =
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverActive = True }
 
-newGame :: [String] -> IO (ServerWorld, [ServerCommand])
-newGame names =
-  do w   <- initServerWorld names
+newGame :: [(String,Int)] -> IO (ServerWorld, [ServerCommand])
+newGame scores =
+  do w   <- initServerWorld scores
      return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
@@ -65,8 +65,8 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: [String] -> Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop names i hs h var = forever $
+clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop i hs h var = forever $
   do msg  <- hGetClientCommand h
      (msgs,kills,needsCountdown) <- modifyMVar var $ \w ->
        let players = serverPlayers w
@@ -74,8 +74,9 @@ clientSocketLoop names i hs h var = forever $
            mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
 
        in case msg of
-            NewGame | not (serverActive w) -> do (w',m) <- newGame names
-                                                 return (w',(m,[],True))
+            NewGame | not (serverActive w) ->
+                        do (w',m) <- newGame (serverScores w)
+                           return (w',(m,[],True))
 
             _       | not (serverActive w) || isStuckPlayer me -> return (w,([],[],False))
 
@@ -113,6 +114,10 @@ clientSocketLoop names i hs h var = forever $
      when needsCountdown
        $ readyCountdown hs var
 
+serverScores :: ServerWorld -> [(String,Int)]
+serverScores w = [ (playerUsername p, playerScore p) | p <- serverPlayers w ]
+
+
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
   do var <- newMVar []
@@ -140,10 +145,10 @@ runServer hs w = loop =<< getCurrentTime
        threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
        loop thisTime
 
-initServerWorld :: [String] -> IO ServerWorld
-initServerWorld names =
-  do let playerCount = length names
-     serverPlayers <- zipWithM initPlayer [0 ..] names
+initServerWorld :: [(String,Int)] -> IO ServerWorld
+initServerWorld scores =
+  do let playerCount = length scores
+     serverPlayers <- zipWithM initPlayer [0 ..] scores
      serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
      let serverActive = False
      return ServerWorld { .. }
@@ -159,15 +164,38 @@ updateServerWorld hs t w
               [_] -> survivors
               _   -> filter isWinner pcs'
 
-        unless (null winners)
-           $ announce hs $ ServerMessage
-           $ intercalate ", " (map playerUsername winners) ++ " wins!"
+        pcs2 <-
+         if null winners
+           then return pcs'
+           else do let ps = map (addVictory winners) pcs'
+                   announce hs $ ServerMessage
+                            $ commas (map playerUsername winners) ++ " wins!"
+                   announce hs
+                      $ ServerMessage
+                      $ commas $ map prettyScore ps
+                   return ps
 
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
-        return w { serverPlayers = pcs'
+        return w { serverPlayers = pcs2
                  , serverNpcs    = npcs'
                  , serverActive  = null winners
                  }
+
+prettyScore :: Player -> String
+prettyScore p = playerUsername p ++ ": " ++ show (playerScore p)
+
+commas :: [String] -> String
+commas = intercalate ", "
+
+addVictory :: [Player] -> Player -> Player
+addVictory winners p
+  |  playerName p `elem` map playerName winners =
+                                p { playerScore = 1 + playerScore p }
+  | otherwise = p
+
+
+playerName :: Player -> Int
+playerName = npcName . playerNpc
 
 updatePlayer :: Handles -> Float -> Player -> IO Player
 updatePlayer hs t p =

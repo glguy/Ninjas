@@ -58,6 +58,7 @@ data NPC      = NPC
 data Player   = Player
   { playerNpc      :: NPC
   , playerUsername :: String
+  , playerScore    :: Int
   , playerVisited  :: [Int]
   , playerSmokes   :: Int
   }
@@ -239,8 +240,8 @@ initServerNPC think npcName =
          npcState = Waiting Wait { .. }
      return NPC { .. }
 
-initPlayer :: Int -> String -> IO Player
-initPlayer name playerUsername =
+initPlayer :: Int -> (String,Int) -> IO Player
+initPlayer name (playerUsername,playerScore) =
   do playerNpc <- initServerNPC False name
      let playerVisited = []
          playerSmokes  = 1
