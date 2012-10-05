@@ -24,6 +24,7 @@ npcCount = 10
 serverMain :: Int -> IO ()
 serverMain n = do
   sock <- listenOn gamePort
+  putStrLn $ "Server listening for ninjas on " ++ (showPort gamePort) ++ "."
   _ <- forkIO $ do
     (hs, names) <- getConnections sock n
     sClose sock
@@ -45,10 +46,15 @@ serverMain n = do
   _ <- getLine
   return ()
 
+showPort :: PortID-> String
+showPort (Service s) = "service " ++ s
+showPort (PortNumber n) = "port " ++ show n
+showPort (UnixSocket s) = "socket " ++ s
+
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
-  do forM_ [3,2,1::Int] $ \i ->
-       do announce hs $ ServerMessage $ show i
+  do forM_ ["3","2","1", "Capture the Diamonds!"] $ \i ->
+       do announce hs $ ServerMessage i
           threadDelay 1000000
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
