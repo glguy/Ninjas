@@ -92,7 +92,7 @@ drawWorld w     = pictures
 
 drawSmoke :: (Float, Point) -> Picture
 drawSmoke (t, pt)
-  = translate (fst pt) (snd pt)
+  = translateV pt
   $ rotate (radToDeg t)
   $ scale scalar scalar
   $ pictures
@@ -127,7 +127,7 @@ messagePicture i msg
 
 dingPicture :: Int -> Picture
 dingPicture n =
-  pictures [ translate (fst dingPosition) (snd dingPosition)
+  pictures [ translateV dingPosition
            $ translate (5 * fromIntegral i) (- 5 * fromIntegral i)
            $ scale dingScale dingScale
            $ color white
@@ -135,8 +135,8 @@ dingPicture n =
            | i <- [0..n-1]]
 
 drawPillar :: Point -> Picture
-drawPillar (x,y)
-  = translate x y
+drawPillar pt
+  = translateV pt
   $ color cyan
   $ rectangleWire pillarSize pillarSize
 
@@ -145,25 +145,26 @@ borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninja
   where (width,height) = subPt boardMax boardMin
 
 drawNPC :: [(Float, Point)] -> NPC -> Picture
-drawNPC smokes npc =
-  let state = npcState npc
-  in  translate x y
+drawNPC smokes npc
+  | covered = blank
+  | otherwise
+    = translateV (npcPos npc)
     $ rotate (negate $ radToDeg rads)
-    $ color (c state)
-    $ pictures [ if covered then blank else attackArc
+    $ color c
+    $ pictures [ attackArc
                , circle ninjaRadius
                , scale ninjaRadius ninjaRadius wedge
                ]
-  where
+  where state = npcState npc
+
         smokeCovering (t,pt) = magV (subPt pt (npcPos npc)) + ninjaRadius <= smokeRadiusScalar t
         covered = any smokeCovering smokes
 
-        (x,y) = npcPos npc
-
-        c   Dead                       = red
-        c   (Attacking _)              = purple
-        c   (Waiting w) | npcStunned w = yellow
-        c   _                          = green
+        c = case state of
+            Dead                       -> red
+            (Attacking _)              -> purple
+            (Waiting w) | npcStunned w -> yellow
+            _                          -> green
 
         purple = makeColor8 0xa0 0x20 0xf0 0xff
 
@@ -176,13 +177,17 @@ drawNPC smokes npc =
                ]
 
         attackArc
-          | npcState npc == Dead = blank
+          | state == Dead = blank
           | otherwise
               = color (greyN 0.2)
               $ pictures
                   [ scale attackDistance attackDistance wedge
                   , arcRad (negate attackAngle) attackAngle attackDistance
                   ]
+
+-- | Translate a picture using a 'Vector'
+translateV :: Vector -> Picture -> Picture
+translateV (x,y) = translate x y
 
 -- | Same as 'arc' but with angles measured in radians.
 arcRad :: Float -> Float -> Float -> Picture
