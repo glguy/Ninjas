@@ -101,7 +101,7 @@ updateNPC' elapsed npc =
     Walking w
       | npcDist w < speed -> done ChooseWait
       | otherwise -> working (Walking w { npcDist = npcDist w - speed })
-                             npc { npcPos = addPt (mulSV (elapsed / expected) (npcVelocity w)) (npcPos npc) }
+                             npc { npcPos = addPt (npcVelocity w) (npcPos npc) }
 
     Waiting w ->
       case npcWaiting w of

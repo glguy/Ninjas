@@ -54,15 +54,14 @@ clientSocketLoop i hs h var = forever $
      msgs <- modifyMVar var $ \w -> return $
        let players = serverPlayers w
            (me,them) = extract i players
-           updatePlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
-           updatePlayerNpc f = updatePlayer (mapPlayerNpc f)
+           mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
 
        in case msg of
             _        | not (serverActive w) || isStuckPlayer me -> (w,[])
             ClientSmoke
               | playerSmokes me <= 0 -> (w,[])
               | otherwise ->
-                   (updatePlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
+                   (mapPlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
                    , [ServerSmoke (npcPos (playerNpc me))]
                    )
             ClientCommand cmd -> case cmd of
@@ -70,11 +69,11 @@ clientSocketLoop i hs h var = forever $
                 -- Disregard where the player says he is moving from
                 let pos = constrainPoint (npcPos (playerNpc me)) pos0
                 in if pointInBox pos boardMin boardMax
-                   then   ( updatePlayerNpc $ \npc -> walkingNPC npc pos
+                   then   ( mapPlayer $ mapPlayerNpc $ \npc -> walkingNPC npc pos
                           , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
                           )
                    else   (w, [])
-              Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
+              Stop     -> ( mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
                           , [ServerCommand i cmd]
                           )
               Attack   -> let (me', them', npcs', cmds) = performAttack me them (serverNpcs w)
@@ -84,7 +83,8 @@ clientSocketLoop i hs h var = forever $
                               , cmds
                               )
               _        -> (w,[])
-     forM_ msgs $ \msg -> announce msg hs
+            _ -> (w,[])
+     forM_ msgs $ \out -> announce out hs
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
@@ -125,9 +125,14 @@ updateServerWorld hs t w
   | otherwise =
      do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
    
-        let winners = filter isWinner pcs'
+        let survivors = filter (not . (Dead ==) . npcState . playerNpc) pcs'
+            winners = case survivors of
+              [_] -> survivors
+              _   -> filter isWinner pcs'
+
         unless (null winners) $
                announce (ServerMessage ("Winner! " ++ show (map playerUsername winners))) hs
+
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
         return w { serverPlayers = pcs'
                  , serverNpcs    = npcs'
