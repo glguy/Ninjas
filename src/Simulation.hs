@@ -165,17 +165,18 @@ stunnedNPC npc = waitingNPC npc (Just stunTime) True
 attackNPC :: NPC -> NPC
 attackNPC npc = npc { npcState = Attacking attackDelay }
 
-performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [ServerCommand])
+performAttack :: Player -> [Player] -> [NPC] -> (Player, [Player], [NPC], [ServerCommand], [(Int, String)])
 performAttack attacker players npcs =
   ( mapPlayerNpc attackNPC attacker
   , players'
   , npcs'
   , attackCmd : catMaybes (commands1 ++ commands2)
+  , catMaybes deathnotes
   )
   where
   attackCmd = ServerCommand (npcName pnpc) Attack
 
-  (players', commands1) = unzip $ map checkKill players
+  (players', commands1, deathnotes) = unzip3 $ map checkKill players
   (npcs'   , commands2) = unzip $ map checkStun npcs
 
   pnpc             = playerNpc attacker
@@ -190,8 +191,9 @@ performAttack attacker players npcs =
   checkKill player
     | affected npc = ( player { playerNpc = deadNPC npc }
                      , Just (ServerCommand (npcName npc) Die)
+                     , Just (npcName npc, playerUsername attacker)
                      )
-    | otherwise    = ( player, Nothing )
+    | otherwise    = ( player, Nothing, Nothing )
     where
     npc = playerNpc player
 

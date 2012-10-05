@@ -3,12 +3,13 @@ module Server (serverMain) where
 
 import Control.Concurrent
 import Control.Monad
+import Data.List (intercalate)
 import Data.Maybe (fromMaybe)
+import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
 import Network
 import System.IO
-import Data.Time.Clock
 
 import Simulation
 import NetworkMessages
@@ -26,7 +27,7 @@ serverMain n = do
     w   <- initServerWorld n names
     var <- newMVar w
     let setCommand = generateSetWorld w
-    announce setCommand hs
+    announce hs setCommand
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
@@ -51,18 +52,18 @@ isStuckPlayer p =
 clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
   do msg  <- hGetClientCommand h
-     msgs <- modifyMVar var $ \w -> return $
+     (msgs,kills) <- modifyMVar var $ \w -> return $
        let players = serverPlayers w
            (me,them) = extract i players
            mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
 
        in case msg of
-            _        | not (serverActive w) || isStuckPlayer me -> (w,[])
+            _        | not (serverActive w) || isStuckPlayer me -> (w,([],[]))
             ClientSmoke
-              | playerSmokes me <= 0 -> (w,[])
+              | playerSmokes me <= 0 -> (w,([],[]))
               | otherwise ->
                    (mapPlayer $ \p -> p { playerSmokes = playerSmokes p - 1 }
-                   , [ServerSmoke (npcPos (playerNpc me))]
+                   , ([ServerSmoke (npcPos (playerNpc me))], [])
                    )
             ClientCommand cmd -> case cmd of
               Move _ pos0 ->
@@ -70,21 +71,23 @@ clientSocketLoop i hs h var = forever $
                 let pos = constrainPoint (npcPos (playerNpc me)) pos0
                 in if pointInBox pos boardMin boardMax
                    then   ( mapPlayer $ mapPlayerNpc $ \npc -> walkingNPC npc pos
-                          , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
+                          , ([ServerCommand i (Move (npcPos (playerNpc me)) pos)], [])
                           )
-                   else   (w, [])
+                   else   (w, ([],[]))
               Stop     -> ( mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
-                          , [ServerCommand i cmd]
+                          , ([ServerCommand i cmd], [])
                           )
-              Attack   -> let (me', them', npcs', cmds) = performAttack me them (serverNpcs w)
+              Attack   -> let (me', them', npcs', cmds, kills) = performAttack me them (serverNpcs w)
                           in  (w { serverPlayers = insertPlayer me' them'
                                  , serverNpcs    = npcs'
                                  }
-                              , cmds
+                              , (cmds, kills)
                               )
-              _        -> (w,[])
-            _ -> (w,[])
-     forM_ msgs $ \out -> announce out hs
+              _        -> (w,([],[]))
+            _ -> (w,([],[]))
+     forM_ msgs $ \out -> announce hs out
+     forM_ kills $ \(killed,killer) ->
+       announceOne hs killed (ServerMessage ("Killed by " ++ killer))
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
@@ -93,7 +96,7 @@ getConnections s n =
   where
   aux hs names 0 = return (hs, names)
   aux hs names i =
-    do announce (ServerWaiting i) hs
+    do announce hs $ ServerWaiting i
        (h,host,port) <- accept s
        hSetBuffering h LineBuffering
        ClientJoin name <- hGetClientCommand h
@@ -131,8 +134,9 @@ updateServerWorld hs t w
               [_] -> survivors
               _   -> filter isWinner pcs'
 
-        unless (null winners) $
-               announce (ServerMessage ("Winner! " ++ show (map playerUsername winners))) hs
+        unless (null winners)
+           $ announce hs $ ServerMessage
+           $ intercalate ", " (map playerUsername winners) ++ " wins!"
 
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
         return w { serverPlayers = pcs'
@@ -146,7 +150,7 @@ updatePlayer hs t p =
      let p' = p { playerNpc = npc' }
      case whichPillar (npcPos npc') of
        Just i | i `notElem` playerVisited p -> 
-         do announce ServerDing hs
+         do announce hs ServerDing
             return p' { playerVisited = i : playerVisited p' }
        _ -> return p'
 
@@ -165,7 +169,7 @@ updateNPC hs t think npc =
 
        Just ChooseDestination ->
          do tgt <- randomBoardPoint
-            announce (ServerCommand (npcName npc') (Move (npcPos npc) tgt)) hs
+            announce hs $ ServerCommand (npcName npc') (Move (npcPos npc) tgt)
             return $ walkingNPC npc' tgt
 
        Nothing -> return npc'
@@ -193,7 +197,7 @@ announceOne (Handles var) i msg = withMVar var $ \hs ->
     Just h  -> hPutServerCommand h msg
     Nothing -> return ()    -- XXX: Perhaps say something here.
 
-announce :: ServerCommand -> Handles -> IO ()
-announce msg (Handles var) = withMVar var $ \hs ->
+announce :: Handles -> ServerCommand -> IO ()
+announce (Handles var) msg = withMVar var $ \hs ->
   mapM_ (`hPutServerCommand` msg) (map snd hs)
 
