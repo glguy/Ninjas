@@ -12,8 +12,8 @@ gamePort :: PortID
 gamePort = PortNumber 16000
 
 data Command
-  = Move Point
-  | Stop
+  = Move Point Point
+  | Stop 
   | Attack
   | Stun
   | Die
@@ -72,7 +72,7 @@ instance Binary ClientCommand where
 putCommand :: Command -> Put
 putCommand cmd =
   case cmd of
-    Move pt -> putWord8 1 >> put pt
+    Move pt1 pt2 -> putWord8 1 >> put pt1 >> put pt2
     Stop    -> putWord8 2
     Attack  -> putWord8 3
     Stun    -> putWord8 4
@@ -82,7 +82,7 @@ getCommand :: Get Command
 getCommand =
   do tag <- getWord8
      case tag of
-       1 -> Move `fmap` get
+       1 -> Move `fmap` get `ap` get
        2 -> return Stop
        3 -> return Attack
        4 -> return Stun

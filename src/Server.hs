@@ -21,15 +21,16 @@ serverMain :: Int -> IO ()
 serverMain n = do
   sock <- listenOn gamePort
   _ <- forkIO $ do
-    conns <- getConnections sock n
-    let (hs,names) = unzip conns
+    (hs, names) <- getConnections sock n
     sClose sock
     w   <- initServerWorld n names
     var <- newMVar w
     let setCommand = generateSetWorld w
-    forM_ (zip [0..] hs) $ \(i,h) ->
-      do hPutServerCommand h setCommand
-         forkIO $ clientSocketLoop i hs h var
+    announce setCommand hs
+    -- these handles are only to be used for reading
+    rawHs <- unsafeReadHandles hs
+    forM_ (zip [0..] rawHs) $ \(i,h) ->
+       forkIO $ clientSocketLoop i hs h var
     runServer hs var
   _ <- getLine
   return ()
@@ -47,7 +48,7 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: Int -> [Handle] -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
 clientSocketLoop i hs h var = forever $
   do ClientCommand cmd <- hGetClientCommand h
      putStrLn $ "Client command: " ++ show cmd
@@ -58,11 +59,12 @@ clientSocketLoop i hs h var = forever $
 
        in case cmd of
             _        | not (serverActive w) || isStuckPlayer me -> (w,[])
-            Move pos0 ->
+            Move _ pos0 ->
+              -- Disregard where the player says he is moving from
               let pos = constrainPoint (npcPos (playerNpc me)) pos0
               in if pointInBox pos boardMin boardMax
                  then   ( updatePlayerNpc $ \npc -> walkingNPC npc pos
-                        , [ServerCommand i (Move pos)]
+                        , [ServerCommand i (Move (npcPos (playerNpc me)) pos)]
                         )
                  else   (w, [])
             Stop     -> ( updatePlayerNpc $ \npc -> waitingNPC npc Nothing False
@@ -77,19 +79,22 @@ clientSocketLoop i hs h var = forever $
             _        -> (w,[])
      forM_ msgs $ \msg -> announce msg hs
 
-getConnections :: Socket -> Int -> IO [(Handle,String)]
-getConnections s = aux []
+getConnections :: Socket -> Int -> IO (Handles,[String])
+getConnections s n =
+  do var <- newMVar []
+     aux (Handles var) [] n
   where
-  aux hs 0 = return hs
-  aux hs i =
-    do announce (ServerWaiting i) (map fst hs)
+  aux hs names 0 = return (hs, names)
+  aux hs names i =
+    do announce (ServerWaiting i) hs
        (h,host,port) <- accept s
        hSetBuffering h LineBuffering
        ClientJoin name <- hGetClientCommand h
        putStrLn $ "Got connection from " ++ name ++ "@" ++ host ++ ":" ++ show port
-       aux ((h,name):hs) (i-1)
+       addHandle h hs
+       aux hs (name:names) (i-1)
 
-runServer :: [Handle] -> MVar ServerWorld -> IO a
+runServer :: Handles -> MVar ServerWorld -> IO a
 runServer hs w = forever $
   do 
      let period = recip $ fromIntegral eventsPerSecond
@@ -100,9 +105,6 @@ runServer hs w = forever $
          delayUs = 1000000 * realToFrac (diffUTCTime after before)
      threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - delayUs
 
-announce :: ServerCommand -> [Handle] -> IO ()
-announce msg hs = mapM_ (`hPutServerCommand` msg) hs
-
 initServerWorld :: Int -> [String] -> IO ServerWorld
 initServerWorld playerCount names =
   do serverPlayers <- zipWithM initPlayer [0 ..] names
@@ -110,7 +112,7 @@ initServerWorld playerCount names =
      let serverActive = True
      return ServerWorld { .. }
 
-updateServerWorld    :: [Handle] -> Float -> ServerWorld -> IO ServerWorld
+updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
 updateServerWorld hs t w
   | not (serverActive w) = return w
   | otherwise =
@@ -125,7 +127,7 @@ updateServerWorld hs t w
                  , serverActive  = null winners
                  }
 
-updatePlayer :: [Handle] -> Float -> Player -> IO Player
+updatePlayer :: Handles -> Float -> Player -> IO Player
 updatePlayer hs t p =
   do npc' <- updateNPC hs t False $ playerNpc p
      let p' = p { playerNpc = npc' }
@@ -138,7 +140,7 @@ updatePlayer hs t p =
 isWinner :: Player -> Bool
 isWinner p = length (playerVisited p) == length pillars
 
-updateNPC :: [Handle] -> Float -> Bool -> NPC -> IO NPC
+updateNPC :: Handles -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
   do let (npc',mbTask) = updateNPC' t npc
 
@@ -150,7 +152,7 @@ updateNPC hs t think npc =
 
        Just ChooseDestination ->
          do tgt <- randomBoardPoint
-            announce (ServerCommand (npcName npc') (Move tgt)) hs
+            announce (ServerCommand (npcName npc') (Move (npcPos npc) tgt)) hs
             return $ walkingNPC npc' tgt
 
        Nothing -> return npc'
@@ -163,3 +165,15 @@ constrainPoint from
   . aux intersectSegHorzLine (snd boardMax)
   where
   aux f x p = fromMaybe p (f from p x)
+
+newtype Handles = Handles (MVar [Handle])
+
+addHandle :: Handle -> Handles -> IO ()
+addHandle h (Handles var) = modifyMVar_ var $ \hs -> return (h:hs)
+
+unsafeReadHandles :: Handles -> IO [Handle]
+unsafeReadHandles (Handles var) = readMVar var
+
+announce :: ServerCommand -> Handles -> IO ()
+announce msg (Handles var) = withMVar var $ \hs -> mapM_ (`hPutServerCommand` msg) hs
+

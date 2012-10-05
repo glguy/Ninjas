@@ -150,7 +150,7 @@ arcRad a b = arc (radToDeg a) (radToDeg b)
 
 inputEvent     :: Handle -> Event -> () -> IO ()
 inputEvent h (EventKey k Down _ pos) ()
-  | k == moveButton   = hPutClientCommand h (ClientCommand (Move pos))
+  | k == moveButton   = hPutClientCommand h (ClientCommand (Move (0,0) pos))
   | k == stopButton   = hPutClientCommand h (ClientCommand Stop      )
   | k == attackButton = hPutClientCommand h (ClientCommand Attack    )
 inputEvent _ _ () = return ()
@@ -172,7 +172,7 @@ clientUpdates h var = forever $
        _ -> return ()
   where
   npcCommand cmd npc = case cmd of
-    Move pos -> walkingNPC npc pos
+    Move from to -> walkingNPC npc { npcPos = from } to 
     Stop     -> waitingNPC npc Nothing False
     Stun     -> stunnedNPC npc
     Die      -> deadNPC npc
