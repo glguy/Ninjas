@@ -118,10 +118,11 @@ messagePicture :: Int -> String -> Picture
 messagePicture i msg
   = translate (fst boardMin + 5) (snd boardMin + 5 + textHeight * fromIntegral i)
   $ scale 0.25 0.25
-  $ color white
+  $ color (greyN gray)
   $ text msg
   where
   textHeight = 40
+  gray = (4 - fromIntegral (min 3 i)) / 4
   
 
 dingPicture :: Int -> Picture
