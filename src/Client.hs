@@ -39,9 +39,9 @@ dingScale = 0.25
 dingPosition :: Point
 dingPosition = (fst boardMin + 5, snd boardMax - 20)
 
-clientMain :: HostName -> IO ()
-clientMain hostname =
-  do h <- connectTo hostname gamePort
+clientMain :: HostName -> Int -> IO ()
+clientMain hostname port =
+  do h <- connectTo hostname (PortNumber (fromIntegral port))
      hSetBuffering h LineBuffering
 
      name <- getUsername

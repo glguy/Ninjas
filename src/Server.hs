@@ -1,5 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
-module Server (ServerEnv(..), defaultEnv, serverMain) where
+module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
 import Control.Concurrent
 import Control.Exception
@@ -26,8 +26,8 @@ data ServerEnv = ServerEnv
   , serverPort        :: Int
   }
 
-defaultEnv :: ServerEnv
-defaultEnv = ServerEnv
+defaultServerEnv :: ServerEnv
+defaultServerEnv = ServerEnv
   { npcCount          = 10
   , initialSmokebombs = 1
   , serverPort        = 16000
