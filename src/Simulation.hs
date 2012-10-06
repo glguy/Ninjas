@@ -237,10 +237,17 @@ performAttack attacker players npcs =
     npc = playerNpc player
 
   checkStun npc
-    | affected npc = ( stunnedNPC npc
+    | not (isStunned npc) && affected npc
+                   = ( stunnedNPC npc
                      , Just (ServerCommand (npcName npc) Stun)
                      )
     | otherwise    = ( npc, Nothing )
+
+isStunned :: NPC -> Bool
+isStunned npc =
+  case npcState npc of
+    Waiting Wait { npcStunned = True } -> True
+    _                                  -> False
 
 -- | Compute a random point inside a box.
 randomPoint :: Point -> Point -> IO Point
