@@ -246,11 +246,11 @@ initServerNPC think npcName =
          npcState = Waiting Wait { .. }
      return NPC { .. }
 
-initPlayer :: Int -> (String,Int) -> IO Player
-initPlayer name (playerUsername,playerScore) =
+initPlayer :: Int -> Int -> (String,Int) -> IO Player
+initPlayer smokes name (playerUsername,playerScore) =
   do playerNpc <- initServerNPC False name
      let playerVisited = []
-         playerSmokes  = 1
+         playerSmokes  = smokes
      return Player { .. }
 
 pickWaitTime :: Bool -> IO (Maybe Float)

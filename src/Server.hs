@@ -1,5 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
-module Server (serverMain) where
+module Server (ServerEnv(..), defaultEnv, serverMain) where
 
 import Control.Concurrent
 import Control.Exception
@@ -20,25 +20,35 @@ import Simulation
 import NetworkMessages
 import ListUtils
 
-npcCount :: Int
-npcCount = 10
+data ServerEnv = ServerEnv
+  { npcCount          :: Int
+  , initialSmokebombs :: Int
+  , serverPort        :: Int
+  }
 
-serverMain :: Int -> IO ()
-serverMain n = do
-  sock     <- listenOn gamePort
+defaultEnv :: ServerEnv
+defaultEnv = ServerEnv
+  { npcCount          = 10
+  , initialSmokebombs = 1
+  , serverPort        = 16000
+  }
+
+serverMain :: ServerEnv -> Int -> IO ()
+serverMain env n = do
+  sock     <- listenOn (PortNumber (fromIntegral (serverPort env)))
   sockName <- getSocketName sock
   putStrLn $ "Server listening for ninjas on " ++ show sockName
   _ <- forkIO $ do
     (hs, names) <- getConnections sock n
     sClose sock
 
-    (w,msgs) <- newGame [ (p,0) | p <- names ]
+    (w,msgs) <- newGame env [ (p,0) | p <- names ]
     var <- newMVar w
 
     -- these handles are only to be used for reading
     rawHs <- unsafeReadHandles hs
     forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop i hs h var
+       forkIO $ clientSocketLoop env i hs h var
 
     mapM_ (announce hs) msgs
 
@@ -57,9 +67,9 @@ readyCountdown hs var =
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
 
-newGame :: [(String,Int)] -> IO (ServerWorld, [ServerCommand])
-newGame scores =
-  do w   <- initServerWorld scores
+newGame :: ServerEnv -> [(String,Int)] -> IO (ServerWorld, [ServerCommand])
+newGame env scores =
+  do w <- initServerWorld env scores
      return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
@@ -72,8 +82,9 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop :: Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop i hs h var =
+clientSocketLoop ::
+  ServerEnv -> Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
+clientSocketLoop env i hs h var =
   forever processOne
   `catch` \ e ->
   putStrLn $ "Read loop: Socket error ("++show (e :: IOException)++"), dropping connection"
@@ -88,7 +99,7 @@ clientSocketLoop i hs h var =
 
        in case msg of
             NewGame | serverMode w == Stopped ->
-                        do (w',m) <- newGame $ serverScores w
+                        do (w',m) <- newGame env $ serverScores w
                            returnAnd w' $ do forM_ m $ announce hs
                                              readyCountdown hs var
 
@@ -155,12 +166,13 @@ runServer hs w = loop =<< getCurrentTime
        threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
        loop thisTime
 
-initServerWorld :: [(String,Int)] -> IO ServerWorld
-initServerWorld scores =
+initServerWorld :: ServerEnv -> [(String,Int)] -> IO ServerWorld
+initServerWorld env scores =
   do let playerCount = length scores
-     serverPlayers <- zipWithM initPlayer [0 ..] scores
-     serverNpcs    <- mapM (initServerNPC True) [playerCount .. npcCount + playerCount - 1]
-     let serverMode = Starting
+     let newPlayer   = initPlayer (initialSmokebombs env)
+     serverPlayers   <- zipWithM newPlayer [0 ..] scores
+     serverNpcs      <- mapM (initServerNPC True) [playerCount .. npcCount env + playerCount - 1]
+     let serverMode  = Starting
      return ServerWorld { .. }
 
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
