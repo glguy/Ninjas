@@ -48,7 +48,7 @@ pillarSize :: Float
 pillarSize = 30
 
 frameWait :: Float
-frameWait = 0.35
+frameWait = 0.2
 
 data NPC      = NPC
   { npcName   :: Int

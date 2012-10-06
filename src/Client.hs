@@ -13,6 +13,7 @@ import NetworkMessages
 
 import ListUtils
 import Simulation
+import Anim
 
 moveButton, stopButton, attackButton, smokeButton, newGameButton :: Key
 moveButton = MouseButton LeftButton
@@ -41,7 +42,8 @@ dingPosition = (fst boardMin + 5, snd boardMax - 20)
 
 clientMain :: HostName -> Int -> IO ()
 clientMain hostname port =
-  do h <- connectTo hostname (PortNumber (fromIntegral port))
+  do anim <- loadAnimData
+     h <- connectTo hostname (PortNumber (fromIntegral port))
      hSetBuffering h LineBuffering
 
      name <- getUsername
@@ -50,7 +52,7 @@ clientMain hostname port =
      poss <- getInitialWorld h
      r <- newMVar (initClientWorld poss)
      _ <- forkIO $ clientUpdates h r
-     runGame h r
+     runGame anim h r
 
 serverWaitingMessage :: Int -> String
 serverWaitingMessage n =
@@ -74,25 +76,25 @@ initClientWorld poss =
         , smokeTimers = []
         }
 
-runGame :: Handle -> MVar World -> IO ()
-runGame h var =
+runGame :: AnimData -> Handle -> MVar World -> IO ()
+runGame anim h var =
      playIO
        (InWindow "Ninjas" (round width + windowPadding, round height + windowPadding) (10,10))
        black
        eventsPerSecond
        () -- "state"
-       (\() -> fmap drawWorld (readMVar var))
+       (\() -> fmap (drawWorld anim) (readMVar var))
        (inputEvent h)
        (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
   where (width,height) = subPt boardMax boardMin
 
-drawWorld      :: World -> Picture
-drawWorld w     = pictures
+drawWorld      :: AnimData -> World -> Picture
+drawWorld anim w = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : messagePictures (worldMessages w)
                 : map drawPillar pillars
-               ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
+               ++ map (drawNPC anim (smokeTimers w)) (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
 
 drawSmoke :: (Float, Point) -> Picture
@@ -149,17 +151,17 @@ borderPicture  :: Picture
 borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
-drawNPC :: [(Float, Point)] -> NPC -> Picture
-drawNPC smokes npc
+drawNPC :: AnimData -> [(Float, Point)] -> NPC -> Picture
+drawNPC anim smokes npc
   | covered = blank
   | otherwise
     = translateV (npcPos npc)
     $ rotate (negate $ radToDeg rads)
     $ color c
     $ pictures [ attackArc
-               , circle ninjaRadius
+               -- , circle ninjaRadius
                , pic
-               , scale ninjaRadius ninjaRadius wedge
+               -- , scale ninjaRadius ninjaRadius wedge
                ]
   where state = npcState npc
 
@@ -173,9 +175,8 @@ drawNPC smokes npc
             _                          -> green
 
         pic = case state of
-                Walking w -> translate 0 (2 + ninjaRadius)
-                          $ scale 0.1 0.1 $ text $ show $ snd $ npcWalkFrame w
-                _         -> blank
+                Walking w -> walkFrames anim !! snd (npcWalkFrame w)
+                _         -> stayFrame anim
 
         purple = makeColor8 0xa0 0x20 0xf0 0xff
 
