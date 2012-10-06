@@ -157,14 +157,6 @@ updateNPC' elapsed npc =
 mapPlayerNpc :: (NPC -> NPC) -> Player -> Player
 mapPlayerNpc f p = p { playerNpc = f (playerNpc p) }
 
--- | Insert a player into a list maintaining the invariant that
--- the players are in order of their "name"s.
-insertPlayer :: Player -> [Player] -> [Player]
-insertPlayer p [] = [p]
-insertPlayer p (x:xs)
-  | npcName (playerNpc p) < npcName (playerNpc x) = p : x : xs
-  | otherwise = x : insertPlayer p xs
-
 -- | Update an NPC to have the goal of walking to a given point.
 walkingNPC :: NPC -> Point -> NPC
 walkingNPC npc npcTarget = npc { npcState = state
