@@ -1,5 +1,6 @@
 module Client (ClientEnv(..), defaultClientEnv, clientMain) where
 
+import Codec.BMP
 import Control.Concurrent
 import Control.Monad
 import Graphics.Gloss.Interface.IO.Game
@@ -86,24 +87,26 @@ initClientWorld poss =
         }
 
 runGame :: Handle -> MVar World -> IO ()
-runGame h var =
+runGame h var = do
+     pic <- loadBMP "ninja.bmp"
+     tower <- loadBMP "tower.bmp"
      playIO
        (InWindow "Ninjas" (round width + windowPadding, round height + windowPadding) (10,10))
        black
        eventsPerSecond
        () -- "state"
-       (\() -> fmap drawWorld (readMVar var))
+       (\() -> fmap (drawWorld pic tower) (readMVar var))
        (inputEvent h)
        (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
   where (width,height) = subPt boardMax boardMin
 
-drawWorld      :: World -> Picture
-drawWorld w     = pictures
+drawWorld      :: Picture -> Picture -> World -> Picture
+drawWorld pic tower w = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : messagePictures (worldMessages w)
-                : map drawPillar pillars
-               ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
+                : map (drawPillar tower) pillars
+               ++ map (drawNPC (smokeTimers w) pic) (worldNpcs w) 
                ++ map drawSmoke (smokeTimers w)
 
 drawSmoke :: (Float, Point) -> Picture
@@ -150,25 +153,27 @@ dingPicture n =
            $ text "DING"
            | i <- [0..n-1]]
 
-drawPillar :: Point -> Picture
-drawPillar pt
+drawPillar :: Picture -> Point -> Picture
+drawPillar tower pt
   = translateV pt
   $ color cyan
-  $ rectangleWire pillarSize pillarSize
+  $ tower
+--  $ rectangleWire pillarSize pillarSize
 
 borderPicture  :: Picture
 borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
-drawNPC :: [(Float, Point)] -> NPC -> Picture
-drawNPC smokes npc
+drawNPC :: [(Float, Point)] -> Picture -> NPC -> Picture
+drawNPC smokes pic npc
   | covered = blank
   | otherwise
     = translateV (npcPos npc)
     $ rotate (negate $ radToDeg rads)
     $ color c
     $ pictures [ attackArc
-               , circle ninjaRadius
+--               , circle ninjaRadius
+               , pic
                , scale ninjaRadius ninjaRadius wedge
                ]
   where state = npcState npc
