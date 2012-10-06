@@ -13,6 +13,7 @@ import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
 import Prelude hiding (catch)
 import Network
+import Network.Socket (getSocketName)
 import System.IO
 
 import Simulation
@@ -24,7 +25,9 @@ npcCount = 10
 
 serverMain :: Int -> IO ()
 serverMain n = do
-  sock <- listenOn gamePort
+  sock     <- listenOn gamePort
+  sockName <- getSocketName sock
+  putStrLn $ "Server listening for ninjas on " ++ show sockName
   _ <- forkIO $ do
     (hs, names) <- getConnections sock n
     sClose sock
@@ -48,8 +51,8 @@ serverMain n = do
 
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
-  do forM_ [3,2,1::Int] $ \i ->
-       do announce hs $ ServerMessage $ show i
+  do forM_ ["3","2","1"] $ \txt ->
+       do announce hs $ ServerMessage txt
           threadDelay 1000000
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
