@@ -176,6 +176,8 @@ drawNPC anim smokes npc
 
         pic = case state of
                 Walking w -> walkFrames anim !! snd (npcWalkFrame w)
+                Attacking {} -> translate 20 0 $ attackFrame anim
+                Waiting w | npcStunned w -> stunnedFrame anim
                 _         -> stayFrame anim
 
         purple = makeColor8 0xa0 0x20 0xf0 0xff
