@@ -23,5 +23,6 @@ executable Ninjas
                        gloss        ==1.7.*,
                        network      ==2.3.*,
                        random       ==1.0.*,
+                       bmp          ==1.2.*,
                        time
   ghc-options:         -Wall
