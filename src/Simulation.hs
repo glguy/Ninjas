@@ -38,12 +38,12 @@ ninjaRadius = 10
 
 -- | Maximum distance from the center of a player where an attack has an effect
 attackDistance :: Float
-attackDistance = 75
+attackDistance = 50
 
 -- | Maximum angle in radians in either direction from a player's direction of
 -- travel where the attacks have an effect
 attackAngle    :: Float
-attackAngle    = pi / 4
+attackAngle    = pi / 3
 
 -- | Duration in second for which an NPC will be stunned after an attack
 stunTime :: Float
