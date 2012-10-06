@@ -290,7 +290,7 @@ announce (Handles var) msg =
         return False
 
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
-extractPlayer i [] = Nothing
+extractPlayer _ [] = Nothing
 extractPlayer i (p:ps)
   | npcName (playerNpc p) == i = return (p,ps)
   | otherwise = do (x,xs) <- extractPlayer i ps
