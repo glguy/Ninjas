@@ -11,39 +11,53 @@ import System.Random (randomRIO)
 
 import NetworkMessages
 
+-- | Smallest point on the board
 boardMin :: Point
 boardMin = (-350,-250)
 
+-- | Largest point on the board
 boardMax :: Point
 boardMax = (350,250)
 
+-- | Pixels per second traveled by ninjas
 speed :: Float
 speed = 100
 
+-- | Duration in seconds a player is stunned after an attack
 attackDelay :: Float
 attackDelay = 1
 
+-- | Maximum time an NPC will wait before choosing a new destination
 restTime :: Float
 restTime = 2
 
+-- | Radius of ninja sprite in pixels. This is used for drawing
+-- a ninja and determining when he is hidden under smoke.
 ninjaRadius :: Float
 ninjaRadius = 10
 
+-- | Maximum distance from the center of a player where an attack has an effect
 attackDistance :: Float
 attackDistance = 75
 
+-- | Maximum angle in radians in either direction from a player's direction of
+-- travel where the attacks have an effect
 attackAngle    :: Float
 attackAngle    = pi / 4
 
+-- | Duration in second for which an NPC will be stunned after an attack
 stunTime :: Float
 stunTime = 3
 
+-- | The number of time update events gloss should attempt to run per second
 eventsPerSecond :: Int
 eventsPerSecond = 100
 
+-- | The locations of the centers of the win locations in the game
 pillars :: [Point]
 pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
 
+-- | The length of a side of the win location squares
 pillarSize :: Float
 pillarSize = 30
 
@@ -99,7 +113,14 @@ data ServerMode = Playing | Starting | Stopped
 
 data ThinkTask = ChooseWait | ChooseDestination
 
-updateNPC' :: Float -> NPC -> (NPC, Maybe ThinkTask)
+-- | Compute a new NPC given a number of elapsed seconds. An optional
+-- update task will be returned if the server should compute a new
+-- goal for the NPC. Clients will ignore this task and wait for the
+-- server to send an update.
+updateNPC' ::
+  Float {- ^ elapsed seconds -} ->
+  NPC   ->
+  (NPC, Maybe ThinkTask)
 updateNPC' elapsed npc =
   case state of
     Walking w
@@ -132,15 +153,19 @@ updateNPC' elapsed npc =
 
         working s n = (n { npcState = s}, Nothing)
 
+-- | Lift a function on NPCs to one on Players
 mapPlayerNpc :: (NPC -> NPC) -> Player -> Player
 mapPlayerNpc f p = p { playerNpc = f (playerNpc p) }
 
+-- | Insert a player into a list maintaining the invariant that
+-- the players are in order of their "name"s.
 insertPlayer :: Player -> [Player] -> [Player]
 insertPlayer p [] = [p]
 insertPlayer p (x:xs)
   | npcName (playerNpc p) < npcName (playerNpc x) = p : x : xs
   | otherwise = x : insertPlayer p xs
 
+-- | Update an NPC to have the goal of walking to a given point.
 walkingNPC :: NPC -> Point -> NPC
 walkingNPC npc npcTarget = npc { npcState = state
                                , npcFacing = facing }
@@ -155,23 +180,38 @@ walkingNPC npc npcTarget = npc { npcState = state
   path        = subPt npcTarget (npcPos npc)
   npcDist     = magV path
 
+-- | Update an NPC to have the goal of waiting for an optional
+-- duration and optionally to be drawn as stunned. If a duration
+-- is specified the NPC will be updated automatically by the server.
+-- NPCs without a duration are typically players.
 waitingNPC :: NPC -> Maybe Float -> Bool -> NPC
 waitingNPC npc npcWaiting npcStunned = npc { npcState = state }
   where
   state = Waiting Wait { .. }
 
+-- | Update an NPC to be dead
 deadNPC :: NPC -> NPC
 deadNPC npc = npc { npcState = Dead }
 
+-- | Update an NPC to be stunned for the default stun duration.
 stunnedNPC :: NPC -> NPC
 stunnedNPC npc = waitingNPC npc (Just stunTime) True
 
+-- | Update an NPC to be in the attacking state for the
+-- default attack duration.
 attackNPC :: NPC -> NPC
 attackNPC npc = npc { npcState = Attacking attackDelay }
 
+-- | Given an attacking player, the other players, and the NPCs
+-- compute the new state of the attacker, the other players, and
+-- the NPCs as well as a list of messages to broadcast to all
+-- players and a list of the names of players who were killed
+-- in the attack.
 performAttack ::
-  Player -> [Player] -> [NPC] ->
-  (Player, [Player], [NPC], [ServerCommand], [(Int, String)])
+  Player   {- ^ attacker              -} ->
+  [Player] {- ^ possible kill targets -} ->
+  [NPC]    {- ^ possible stun targets -} ->
+  (Player, [Player], [NPC], [ServerCommand], [Int])
 performAttack attacker players npcs =
   ( mapPlayerNpc attackNPC attacker
   , players'
@@ -198,7 +238,7 @@ performAttack attacker players npcs =
     | npcState npc /= Dead && affected npc
           = ( player { playerNpc = deadNPC npc }
                      , Just (ServerCommand (npcName npc) Die)
-                     , Just (npcName npc, playerUsername attacker)
+                     , Just (npcName npc)
                      )
     | otherwise    = ( player, Nothing, Nothing )
     where
@@ -210,33 +250,45 @@ performAttack attacker players npcs =
                      )
     | otherwise    = ( npc, Nothing )
 
-
+-- | Compute a random point inside a box.
 randomPoint :: Point -> Point -> IO Point
 randomPoint (minX,minY) (maxX,maxY) =
   do x <- randomRIO (minX,maxX)
      y <- randomRIO (minY,maxY)
      return (x,y)
 
+-- | Compute a random point inside the board.
 randomBoardPoint :: IO Point
 randomBoardPoint = randomPoint boardMin boardMax
 
+-- | Compute a random unit vector.
 randomUnitVector :: IO Vector
 randomUnitVector =
   do degrees <- randomRIO (0,359)
      let rads = degToRad $ fromInteger degrees
      return $ unitVectorAtAngle rads
 
-addPt :: Point -> Point -> Point
+-- | Add two vectors
+addPt :: Vector -> Vector -> Vector
 addPt (x,y) (a,b) = (x+a,y+b)
 
-subPt :: Point -> Point -> Point
+-- | Subtract two vectors
+subPt :: Vector -> Vector -> Vector
 subPt (x,y) (a,b) = (x-a,y-b)
 
+-- | Construct a new NPC given a name, a position,
+-- and a facing unit vector. This function is used
+-- by clients who are told the parameters by the
+-- server.
 initClientNPC :: Int -> (Point, Vector) -> NPC
 initClientNPC npcName (npcPos, npcFacing) =
   let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
   in  NPC { .. }
 
+-- | Construct a new NPC given a name, a position,
+-- and a facing unit vector. When think is True,
+-- the NPC will be scheduled to begin walking
+-- after a random duration.
 initServerNPC :: Bool -> Int -> IO NPC
 initServerNPC think npcName =
   do npcPos     <- randomBoardPoint
@@ -246,6 +298,9 @@ initServerNPC think npcName =
          npcState = Waiting Wait { .. }
      return NPC { .. }
 
+-- | Construct a new player given an initial number
+-- of smokebombs, an identifier, a username, and a
+-- starting score.
 initPlayer :: Int -> Int -> (String,Int) -> IO Player
 initPlayer smokes name (playerUsername,playerScore) =
   do playerNpc <- initServerNPC False name
@@ -253,18 +308,28 @@ initPlayer smokes name (playerUsername,playerScore) =
          playerSmokes  = smokes
      return Player { .. }
 
-pickWaitTime :: Bool -> IO (Maybe Float)
+-- | When True, compute a new random wait time value.
+pickWaitTime ::
+  Bool {- ^ compute random delay -} ->
+  IO (Maybe Float)
 pickWaitTime False = return Nothing
 pickWaitTime True  = fmap Just $ randomRIO (0, restTime)
 
-isInPillar :: Point -> Point -> Bool
+-- | Determine if a point lies within a given pillar.
+isInPillar ::
+  Point {- ^ location to test -} ->
+  Point {- ^ center of pillar -} ->
+  Bool
 isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2) (x+pillarSize/2, y+pillarSize/2)
 
+-- | Determine the index, if any, of the pillar with contains a point.
 whichPillar :: Point -> Maybe Int
 whichPillar p = findIndex (isInPillar p) pillars
 
+-- | Return true if the given player can use smokebombs.
 hasSmokebombs :: Player -> Bool
 hasSmokebombs p = playerSmokes p > 0
 
+-- | Update a player to have one fewer smokebombs.
 consumeSmokebomb :: Player -> Player
 consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }

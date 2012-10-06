@@ -129,7 +129,8 @@ clientSocketLoop env i hs h var =
                                      }
                           in returnAnd w'
                             $ do forM_ cmds  $ announce hs
-                                 forM_ kills $ \(killed,killer) ->
+                                 forM_ kills $ \killed ->
+                                     let killer = playerUsername me in
                                      announceOne hs killed
                                        $ ServerMessage $ "Killed by " ++ killer
 
