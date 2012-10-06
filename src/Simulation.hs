@@ -47,6 +47,9 @@ pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
 pillarSize :: Float
 pillarSize = 30
 
+frameWait :: Float
+frameWait = 0.35
+
 data NPC      = NPC
   { npcName   :: Int
   , npcPos    :: Point
@@ -72,6 +75,7 @@ data State
   deriving (Show, Read, Eq)
 
 data WalkInfo = Walk { npcTarget    :: Point
+                     , npcWalkFrame :: (Float, Int)
                      -- Cached, so that we don't recompute all the time.
                      , npcDist      :: Float
                      , npcVelocity  :: Vector
@@ -104,10 +108,14 @@ updateNPC' elapsed npc =
   case state of
     Walking w
       | npcDist w < step -> done ChooseWait
-      | otherwise -> working (Walking w { npcDist = npcDist w - step })
+      | otherwise -> working (Walking w { npcDist = npcDist w - step
+                                        , npcWalkFrame = nextFrame })
                              npc { npcPos = addPt (mulSV elapsed (npcVelocity w)) (npcPos npc) }
 
       where step = elapsed * speed
+            nextFrame = case npcWalkFrame w of
+                          (x,n) | x < elapsed -> (frameWait, (n + 1) `mod` 4)
+                                | otherwise   -> (x - elapsed, n)
     Waiting w ->
       case npcWaiting w of
         Nothing -> working state npc
@@ -151,6 +159,9 @@ walkingNPC npc npcTarget = npc { npcState = state
               | otherwise       = npcFacing npc
 
   npcVelocity = mulSV speed facing
+  npcWalkFrame = case npcState npc of
+                   Walking Walk { npcWalkFrame = x } -> x
+                   _ -> (frameWait, 0)
 
   path        = subPt npcTarget (npcPos npc)
   npcDist     = magV path

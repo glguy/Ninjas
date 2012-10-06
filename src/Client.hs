@@ -158,6 +158,7 @@ drawNPC smokes npc
     $ color c
     $ pictures [ attackArc
                , circle ninjaRadius
+               , pic
                , scale ninjaRadius ninjaRadius wedge
                ]
   where state = npcState npc
@@ -170,6 +171,11 @@ drawNPC smokes npc
             (Attacking _)              -> purple
             (Waiting w) | npcStunned w -> yellow
             _                          -> green
+
+        pic = case state of
+                Walking w -> translate 0 (2 + ninjaRadius)
+                          $ scale 0.1 0.1 $ text $ show $ snd $ npcWalkFrame w
+                _         -> blank
 
         purple = makeColor8 0xa0 0x20 0xf0 0xff
 
