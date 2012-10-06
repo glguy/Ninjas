@@ -18,7 +18,6 @@ import System.IO
 
 import Simulation
 import NetworkMessages
-import ListUtils
 
 data ServerEnv = ServerEnv
   { npcCount          :: Int
@@ -61,9 +60,9 @@ serverMain env n = do
 
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
-  do forM_ ["3","2","1"] $ \txt ->
+  do forM_ ["3","2","1", "Capture the Diamonds!"] $ \txt ->
        do announce hs $ ServerMessage txt
-          threadDelay 1000000
+          threadDelay 600000
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
 
@@ -92,9 +91,9 @@ clientSocketLoop env i hs h var =
   processOne = do
      msg  <- hGetClientCommand h
      join $ modifyMVar var $ \w ->
-       let players = serverPlayers w
-           (me,them) = extract i players
-           mapPlayer f = w { serverPlayers = updateList i f (serverPlayers w) }
+       let (me,them) = fromMaybe (error ("clientSocketLoop: Lost player " ++ show i))
+                     $ extractPlayer i $ serverPlayers w
+           mapPlayer f = w { serverPlayers = f me : them }
            returnAnd x m = return (x,m)
 
        in case msg of
@@ -124,12 +123,13 @@ clientSocketLoop env i hs h var =
 
               Attack   -> let (me', them', npcs', cmds, kills)
                                  = performAttack me them (serverNpcs w)
-                              w' = w { serverPlayers = insertPlayer me' them'
+                              w' = w { serverPlayers = me' : them'
                                      , serverNpcs    = npcs'
                                      }
                           in returnAnd w'
                             $ do forM_ cmds  $ announce hs
-                                 forM_ kills $ \(killed,killer) ->
+                                 forM_ kills $ \killed ->
+                                     let killer = playerUsername me in
                                      announceOne hs killed
                                        $ ServerMessage $ "Killed by " ++ killer
 
@@ -288,3 +288,10 @@ announce (Handles var) msg =
       `catch` \ e ->
      do putStrLn $ "announce: Socket error ("++show (e :: IOException)++"), dropping connection"
         return False
+
+extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
+extractPlayer _ [] = Nothing
+extractPlayer i (p:ps)
+  | npcName (playerNpc p) == i = return (p,ps)
+  | otherwise = do (x,xs) <- extractPlayer i ps
+                   return (x,p:xs)

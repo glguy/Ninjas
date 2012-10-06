@@ -2,11 +2,13 @@
 
 module Main where
 
+import Control.Monad (mplus)
+import Data.Maybe (fromMaybe)
 import System.Environment
 import System.Exit
 import System.Console.GetOpt
 
-import Client (clientMain)
+import Client (ClientEnv(..), defaultClientEnv, clientMain)
 import Server (ServerEnv(..), defaultServerEnv, serverMain)
 
 --------------------------------------------------------------------------------
@@ -42,11 +44,30 @@ launchServer args =
          ]
 
 launchClient :: [String] -> IO ()
-launchClient args =
-  case args of
-    []    -> clientMain "localhost" (serverPort defaultServerEnv)
-    [h]   -> clientMain h (serverPort defaultServerEnv)
-    [h,p] -> clientMain h (read p)
-    _     -> usage
+launchClient args = do
+  user <- getUsername
+  case getOpt Permute opts args of
+    (fs, [h], [])  -> clientMain (funs defaultClientEnv{username=user
+                                                       ,hostname=h
+                                                       } fs)
+    (fs, _, [])  -> clientMain (funs defaultClientEnv{username=user} fs)
+    (_, _, errs) ->  mapM_ putStrLn errs >> usage
   where
-  usage = putStrLn "Usage: Ninjas client [HOSTNAME [PORT]]" >> exitFailure
+  funs = foldl (\acc f -> f acc)
+  usage = putStrLn (usageInfo "Usage: Ninjas client [HOSTNAME]" opts) >> exitFailure
+  opts = [Option [] ["server"]
+                 (ReqArg (\n env -> env { hostname = n }) "STRING")
+                 "Server hostname"
+         ,Option [] ["port"]
+                 (ReqArg (\n env -> env { clientPort = read n }) "NUM")
+                 "Server port"
+         ,Option [] ["user"]
+                 (ReqArg (\n env -> env { username = n }) "STRING")
+                 "User Name"
+         ]
+
+getUsername :: IO String
+getUsername =
+  do env <- getEnvironment
+     return $ fromMaybe (username defaultClientEnv)
+            $ lookup "USER" env `mplus` lookup "USERNAME" env
