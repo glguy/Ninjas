@@ -61,9 +61,9 @@ serverMain env n = do
 
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
-  do forM_ ["3","2","1"] $ \txt ->
+  do forM_ ["3","2","1", "Capture the Diamonds!"] $ \txt ->
        do announce hs $ ServerMessage txt
-          threadDelay 1000000
+          threadDelay 600000
      announce hs ServerReady
      modifyMVar_ var $ \w -> return w { serverMode = Playing }
 
