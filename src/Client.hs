@@ -1,14 +1,13 @@
-module Client (clientMain) where
+module Client (ClientEnv(..), defaultClientEnv, clientMain) where
 
 import Control.Concurrent
 import Control.Monad
-import Data.Maybe (fromMaybe)
 import Graphics.Gloss.Interface.IO.Game
 import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
-import System.Environment (getEnvironment)
 import System.IO
 import Network
+import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 
 import ListUtils
@@ -39,12 +38,24 @@ dingScale = 0.25
 dingPosition :: Point
 dingPosition = (fst boardMin + 5, snd boardMax - 20)
 
-clientMain :: HostName -> Int -> IO ()
-clientMain hostname port =
-  do h <- connectTo hostname (PortNumber (fromIntegral port))
+data ClientEnv = ClientEnv
+  { hostname   :: HostName
+  , clientPort :: Int
+  , username   :: String
+  }
+
+defaultClientEnv :: ClientEnv
+defaultClientEnv = ClientEnv
+  { hostname   = "localhost"
+  , clientPort = (serverPort defaultServerEnv)
+  , username   = "Anon"
+  }
+
+clientMain :: ClientEnv -> IO ()
+clientMain (ClientEnv host port name) =
+  do h <- connectTo host (PortNumber (fromIntegral port))
      hSetBuffering h LineBuffering
 
-     name <- getUsername
      hPutClientCommand h (ClientJoin name)
 
      poss <- getInitialWorld h
@@ -236,8 +247,3 @@ clientUpdates h var = forever $
     Die      -> deadNPC npc
     Attack   -> attackNPC npc
 
-getUsername :: IO String
-getUsername =
-  do env <- getEnvironment
-     return $ fromMaybe "Anon"
-            $ lookup "USER" env `mplus` lookup "USERNAME" env
