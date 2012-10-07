@@ -55,7 +55,7 @@ defaultClientEnv = ClientEnv
 
 clientMain :: ClientEnv -> IO ()
 clientMain (ClientEnv host port name) =
-  do anim <- Anim.loadNPC
+  do anim <- Anim.loadWorld
      h <- connectTo host (PortNumber (fromIntegral port))
      hSetBuffering h LineBuffering
 
@@ -80,13 +80,13 @@ getInitialWorld h =
             getInitialWorld h
        _ -> fail "Unexpected initial message"
 
-initClientWorld :: Anim.NPC -> [(Point, Vector)] -> World
+initClientWorld :: Anim.World -> [(Point, Vector)] -> World
 initClientWorld anim poss =
-  World { worldNpcs = zipWith (initClientNPC anim) [0..] poss
+  World { worldNpcs = zipWith (initClientNPC (Anim.npc anim)) [0..] poss
         , dingTimers = []
         , worldMessages = []
         , smokeTimers = []
-        , npcAppearance = anim
+        , appearance = anim
         }
 
 runGame :: Handle -> MVar World -> IO ()
@@ -106,7 +106,7 @@ drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : messagePictures (worldMessages w)
-                : map drawPillar pillars
+                : map (drawPillar w) pillars
                ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
 
@@ -154,11 +154,10 @@ dingPicture n =
            $ text "DING"
            | i <- [0..n-1]]
 
-drawPillar :: Point -> Picture
-drawPillar pt
+drawPillar :: World -> Point -> Picture
+drawPillar w pt
   = translateV pt
-  $ color cyan
-  $ rectangleWire pillarSize pillarSize
+  $ Anim.curFrame $ Anim.tower $ appearance w
 
 borderPicture  :: Picture
 borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
@@ -216,10 +215,12 @@ inputEvent _ _ () = return ()
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
-  w { worldNpcs   = map (updateClientNPC (npcAppearance w) d) (worldNpcs w)
+  w { worldNpcs   = map (updateClientNPC npcLooks d) (worldNpcs w)
     , dingTimers  = [ t - d      |  t     <- dingTimers  w, t > d]
     , smokeTimers = [(t - d, pt) | (t,pt) <- smokeTimers w, t > d]
+    , appearance  = Anim.updateWorld d (appearance w)
     }
+  where npcLooks = Anim.npc (appearance w)
 
 updateClientNPC :: Anim.NPC -> Float -> ClientNPC -> ClientNPC
 updateClientNPC looks d cnpc =
@@ -251,12 +252,12 @@ clientUpdates h var = forever $
        ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
        ServerSmoke pt    -> modifyMVar_ var $ \w -> return $ w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
        SetWorld poss ->
-        modifyMVar_ var $ \w -> return $ initClientWorld (npcAppearance w) poss
+        modifyMVar_ var $ \w -> return $ initClientWorld (appearance w) poss
        _ -> return ()
   where
   npcCommand w cmd cnpc =
     let npc = clientNPC cnpc
-    in newNpcState (npcAppearance w) $
+    in newNpcState (Anim.npc $ appearance w) $
        case cmd of
          Move from to -> walkingNPC npc { npcPos = from } to
          Stop     -> waitingNPC npc Nothing False

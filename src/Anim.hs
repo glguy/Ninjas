@@ -73,6 +73,21 @@ loadNPC =
      return NPC { .. }
 
 
+data World = World { background, tower :: Animation
+                   , npc :: NPC }
+
+loadWorld :: IO World
+loadWorld =
+  do npc <- loadNPC
+     tower <- loadAnim "tower"
+     let background = once defaultFrameDelay []
+     return World { .. }
+
+
+updateWorld :: Float -> World -> World
+updateWorld e w = w { background = update e (background w)
+                    , tower      = update e (tower w)
+                    }
 
 
 

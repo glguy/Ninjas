@@ -60,7 +60,7 @@ pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
 
 -- | The length of a side of the win location squares
 pillarSize :: Float
-pillarSize = 30
+pillarSize = 40
 
 data NPC      = NPC
   { npcName   :: Int
@@ -107,7 +107,7 @@ data World = World
   , dingTimers       :: [Float]
   , smokeTimers      :: [(Float, Point)]
   , worldMessages    :: [String]
-  , npcAppearance    :: Anim.NPC
+  , appearance       :: Anim.World
   }
 
 data ServerWorld = ServerWorld
