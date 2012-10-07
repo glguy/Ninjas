@@ -105,10 +105,10 @@ drawWorld      :: World -> Picture
 drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
-                : messagePictures (worldMessages w)
                 : map (drawPillar w) pillars
                ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
+               ++ messagePictures (worldMessages w)
 
 drawSmoke :: (Float, Point) -> Picture
 drawSmoke (t, pt)
@@ -131,8 +131,8 @@ drawSmoke (t, pt)
 smokeRadiusScalar :: Float -> Float
 smokeRadiusScalar t = smokeRadius * sin (t / (smokePeriod / pi))
 
-messagePictures :: [String] -> Picture
-messagePictures msgs = pictures (zipWith messagePicture [0..] msgs)
+messagePictures :: [String] -> [Picture]
+messagePictures msgs = zipWith messagePicture [0..] msgs
 
 messagePicture :: Int -> String -> Picture
 messagePicture i msg
