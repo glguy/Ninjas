@@ -334,7 +334,8 @@ isInPillar ::
   Point {- ^ location to test -} ->
   Point {- ^ center of pillar -} ->
   Bool
-isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2) (x+pillarSize/2, y+pillarSize/2)
+isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2)
+                                  (x+pillarSize/2, y+pillarSize/2)
 
 -- | Determine the index, if any, of the pillar with contains a point.
 whichPillar :: Point -> Maybe Int
