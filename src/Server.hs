@@ -39,7 +39,7 @@ serverMain env n = do
 
   (hs, names) <- startNetwork env n
 
-  (w,msgs) <- newGame env [ (p,0) | p <- names ]
+  (w,msgs) <- newGame env [ (i,p,0) | (i,p) <- zip [0..] names ]
   events <- newChan
 
   -- these handles are only to be used for reading
@@ -68,10 +68,11 @@ readyCountdown hs w =
      announce hs ServerReady
      return w { serverMode = Playing }
 
-newGame :: ServerEnv -> [(String,Int)] -> IO (ServerWorld, [ServerCommand])
+newGame :: ServerEnv -> [(Int,String,Int)] -> IO (ServerWorld, [ServerCommand])
 newGame env scores =
   do w <- initServerWorld env scores
-     return (w, [ SetWorld [(npcPos npc, npcFacing npc) | npc <- allNpcs w] ])
+     return (w, [ SetWorld [(npcName npc, npcPos npc, npcFacing npc)
+                           | npc <- allNpcs w] ])
 
 allNpcs :: ServerWorld -> [NPC]
 allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
@@ -147,12 +148,9 @@ updateWorldForCommand env i hs w msg =
            _        -> return w
        _          -> return w
 
-serverScores :: ServerWorld -> [(String,Int)]
-serverScores w = [ (playerUsername p, playerScore p) | p <- orderedPlayers ]
-  where
-  -- Players need to be ordered so they will work with the next
-  -- when mapped with initPlayer in the next game
-  orderedPlayers = sortBy (comparing (npcName . playerNpc)) (serverPlayers w)
+serverScores :: ServerWorld -> [(Int,String,Int)]
+serverScores w = [ (npcName (playerNpc p), playerUsername p, playerScore p)
+                 | p <- serverPlayers w ]
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
@@ -174,11 +172,11 @@ tickThread events =
   forever $ do writeChan events ServerTick
                threadDelay $ 1000000 `div` eventsPerSecond
 
-initServerWorld :: ServerEnv -> [(String,Int)] -> IO ServerWorld
+initServerWorld :: ServerEnv -> [(Int,String,Int)] -> IO ServerWorld
 initServerWorld env scores =
   do let playerCount = length scores
      let newPlayer   = initPlayer (initialSmokebombs env)
-     serverPlayers   <- zipWithM newPlayer [0 ..] scores
+     serverPlayers   <- mapM (\(i,u,s) -> newPlayer i u s) scores
      serverNpcs      <- mapM (initServerNPC True)
                              [playerCount .. npcCount env + playerCount - 1]
      let serverMode  = Starting
@@ -351,4 +349,9 @@ eventLoop env hs w events lastTick
   logic (ClientDisconnect name) =
     do let hs' = removeHandle name hs
        putStrLn $ "Client disconnect with id " ++ show name
-       eventLoop env hs' w events lastTick
+       let (p,ps) = fromMaybe (error "eventLoop")
+                  $ extractPlayer name $ serverPlayers w
+       announce hs' $ ServerCommand name Die
+       announce hs' $ ServerMessage $ playerUsername p ++ " disconnected"
+       let w' = w { serverPlayers = ps }
+       eventLoop env hs' w' events lastTick

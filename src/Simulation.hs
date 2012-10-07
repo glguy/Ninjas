@@ -292,8 +292,8 @@ subPt (x,y) (a,b) = (x-a,y-b)
 -- and a facing unit vector. This function is used
 -- by clients who are told the parameters by the
 -- server.
-initClientNPC :: Anim.NPC -> Int -> (Point, Vector) -> ClientNPC
-initClientNPC anim npcName (npcPos, npcFacing) =
+initClientNPC :: Anim.NPC -> Int -> Point -> Vector -> ClientNPC
+initClientNPC anim npcName npcPos npcFacing =
   let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
       clientAnim = Anim.stay anim
       clientNPC = NPC { .. }
@@ -315,8 +315,8 @@ initServerNPC think npcName =
 -- | Construct a new player given an initial number
 -- of smokebombs, an identifier, a username, and a
 -- starting score.
-initPlayer :: Int -> Int -> (String,Int) -> IO Player
-initPlayer smokes name (playerUsername,playerScore) =
+initPlayer :: Int -> Int -> String -> Int -> IO Player
+initPlayer smokes name playerUsername playerScore =
   do playerNpc <- initServerNPC False name
      let playerVisited = []
          playerSmokes  = smokes

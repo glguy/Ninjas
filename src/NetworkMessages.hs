@@ -28,7 +28,7 @@ data ClientCommand
   
 data ServerCommand
   = ServerCommand Int Command
-  | SetWorld [(Point,Vector)]
+  | SetWorld [(Int,Point,Vector)]
   | ServerWaiting Int
   | ServerMessage String
   | ServerSmoke Point

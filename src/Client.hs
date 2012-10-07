@@ -11,16 +11,17 @@ import Network
 import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 
-import ListUtils
 import Simulation
 import qualified Anim
 
-moveButton, stopButton, attackButton, smokeButton, newGameButton :: Key
-moveButton = MouseButton LeftButton
-stopButton = MouseButton RightButton
-attackButton = Char 'a'
-smokeButton  = Char 's'
+moveButton, stopButton, attackButton, smokeButton,
+  newGameButton, clearButton :: Key
+moveButton    = MouseButton LeftButton
+stopButton    = MouseButton RightButton
+attackButton  = Char 'a'
+smokeButton   = Char 's'
 newGameButton = Char 'n'
+clearButton   = Char 'c'
 
 windowPadding :: Int
 windowPadding = 60
@@ -72,7 +73,7 @@ serverWaitingMessage n
  ++ show n ++ " more ninja"
  ++ if n > 1 then "s." else "."
 
-getInitialWorld :: Handle -> IO [(Point,Vector)]
+getInitialWorld :: Handle -> IO [(Int,Point,Vector)]
 getInitialWorld h =
   do msg <- hGetServerCommand h
      case msg of
@@ -82,9 +83,10 @@ getInitialWorld h =
             getInitialWorld h
        _ -> fail "Unexpected initial message"
 
-initClientWorld :: Anim.World -> [(Point, Vector)] -> World
+initClientWorld :: Anim.World -> [(Int, Point, Vector)] -> World
 initClientWorld anim poss =
-  World { worldNpcs     = zipWith (initClientNPC (Anim.npc anim)) [0..] poss
+  World { worldNpcs     = [initClientNPC (Anim.npc anim) i p v
+                          | (i,p,v) <- poss ]
         , dingTimers    = []
         , worldMessages = []
         , smokeTimers   = []
@@ -101,7 +103,7 @@ runGame h var =
        eventsPerSecond
        () -- "state"
        (\() -> fmap drawWorld (readMVar var))
-       (inputEvent h)
+       (inputEvent h var)
        (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
   where (width,height) = subPt boardMax boardMin
 
@@ -217,14 +219,18 @@ translateV (x,y) = translate x y
 arcRad :: Float -> Float -> Float -> Picture
 arcRad a b = arc (radToDeg a) (radToDeg b)
 
-inputEvent     :: Handle -> Event -> () -> IO ()
-inputEvent h (EventKey k Down _ pos) ()
+inputEvent     :: Handle -> MVar World -> Event -> () -> IO ()
+inputEvent h var (EventKey k Down _ pos) ()
   | k == moveButton   = hPutClientCommand h (ClientCommand (Move (0,0) pos))
   | k == stopButton   = hPutClientCommand h (ClientCommand Stop      )
   | k == attackButton = hPutClientCommand h (ClientCommand Attack    )
   | k == smokeButton  = hPutClientCommand h (ClientSmoke             )
   | k == newGameButton = hPutClientCommand h NewGame
-inputEvent _ _ () = return ()
+  | k == clearButton  = clearMessages var
+inputEvent _ _ _ () = return ()
+
+clearMessages :: MVar World -> IO ()
+clearMessages var = modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
@@ -268,7 +274,7 @@ clientUpdates h var = forever $
       ServerSmoke pt    -> w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
       SetWorld poss     -> initClientWorld (appearance w) poss
       ServerCommand i m -> let f = npcCommand w m
-                           in w { worldNpcs = updateList i f $ worldNpcs w }
+                           in w { worldNpcs = updateNpcList i f $ worldNpcs w }
       _                 -> w
 
   npcCommand w cmd cnpc =
@@ -281,3 +287,8 @@ clientUpdates h var = forever $
          Die            -> deadNPC npc
          Attack         -> attackNPC npc
 
+updateNpcList :: Int -> (ClientNPC -> ClientNPC) -> [ClientNPC] -> [ClientNPC]
+updateNpcList _ _ [] = []
+updateNpcList i f (n:ns)
+  | npcName (clientNPC n) == i = f n : ns
+  | otherwise      = n : updateNpcList i f ns
