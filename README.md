@@ -17,11 +17,11 @@ which castle was looted or which character was the looter.
 Controls
 --------
 
-**A** - Attack
-**S** - Smoke bomb
-**N** - New game
-**Left Click** - Move to clicked location
-**Right Click** - Stop moving immediately
+* **A** - Attack
+* **S** - Smoke bomb
+* **N** - New game
+* **Left Click** - Move to clicked location
+* **Right Click** - Stop moving immediately
 
 Installation
 ------------
