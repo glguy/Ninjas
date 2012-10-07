@@ -118,17 +118,25 @@ drawSmoke :: (Float, Point) -> Picture
 drawSmoke (t, pt)
   = translateV pt
   $ rotate (radToDeg t)
-  $ scale scalar scalar
-  $ pictures
+  $ scale scalar scalar smokePicture
+  where
+  scalar = smokeRadiusScalar t
+
+smokePicture :: Picture
+smokePicture =
+  pictures
       [ color (greyN 0.1 ) $ circleSolid 1
       , color (greyN 0.25)
          $ pictures [ circle 1
-                    , line [ (0,1) , (0,-1) ]
-                    , line [ (1,0) , (-1,0) ]
+                    , translate s2    s2    $ arc 135 225 s
+                    , translate s2    (-s2) $ arc  45 135 s
+                    , translate (-s2) s2    $ arc 225 315 s
+                    , translate (-s2) (-s2) $ arc 315  45 s
                     ]
       ]
   where
-  scalar = smokeRadiusScalar t
+  s      = 1 / sqrt 2
+  s2     = s / sqrt 2
 
 smokeRadiusScalar :: Float -> Float
 smokeRadiusScalar t = smokeRadius * sin (t / (smokePeriod / pi))
@@ -239,7 +247,7 @@ newNpcState :: Anim.NPC -> NPC -> ClientNPC
 newNpcState looks clientNPC = ClientNPC { .. }
   where
   clientAnim = case npcState clientNPC of
-                 Walking {} -> Anim.walk looks
+                 Walking {}               -> Anim.walk looks
                  Waiting w | npcStunned w -> Anim.stun   looks
                            | otherwise    -> Anim.stay   looks
                  Attacking {}             -> Anim.attack looks
