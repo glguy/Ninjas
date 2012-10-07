@@ -55,8 +55,7 @@ serverMain env n = do
 
     runServer hs var
 
-  _ <- getLine
-  return ()
+  forever (threadDelay (10 * 10000000))
 
 readyCountdown :: Handles -> MVar ServerWorld -> IO ()
 readyCountdown hs var =
@@ -236,7 +235,7 @@ isWinner p = length (playerVisited p) == length pillars
 
 updateNPC :: Handles -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
-  do let (npc',mbTask) = updateNPC' t npc
+  do let (npc',_,mbTask) = updateNPC' t npc
 
      case guard think >> mbTask of
 

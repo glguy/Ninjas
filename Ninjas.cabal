@@ -13,9 +13,7 @@ category:            Game
 build-type:          Simple
 cabal-version:       >=1.8
 
-data-files: images/walk1.bmp, images/walk2.bmp, images/walk3.bmp,
-            images/attack.bmp,
-            images/stunned.bmp
+data-files: images/*.bmp
 
 executable Ninjas
   main-is:             Main.hs
