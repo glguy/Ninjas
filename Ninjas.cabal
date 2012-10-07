@@ -26,5 +26,6 @@ executable Ninjas
                        network      ==2.3.*,
                        random       ==1.0.*,
                        time,
-                       filepath
+                       filepath,
+                       deepseq
   ghc-options:         -Wall

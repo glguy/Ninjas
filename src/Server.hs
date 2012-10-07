@@ -1,6 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
+import Control.DeepSeq (rnf)
 import Control.Concurrent (forkIO, threadDelay, Chan, newChan, readChan, writeChan)
 import Control.Exception
 import Control.Monad
@@ -85,7 +86,7 @@ clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
 clientSocketLoop i h events =
   forever (do c <- hGetClientCommand h
               writeChan events (ClientEvent i c))
-  `finally`
+  `catch` \(SomeException _) ->
   writeChan events (ClientDisconnect i)
      
 
@@ -307,6 +308,7 @@ data ServerEvent
 
 eventLoop :: ServerEnv -> Handles -> ServerWorld -> Chan ServerEvent -> UTCTime -> IO ()
 eventLoop env hs w events lastTick
+  | rnf w `seq` lastTick `seq` False = undefined
   | nullHandles hs = return ()
   | otherwise      = logic =<< readChan events
   where

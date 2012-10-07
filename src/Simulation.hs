@@ -2,6 +2,7 @@
 
 module Simulation where
 
+import Control.DeepSeq
 import Data.Maybe (catMaybes)
 import Data.List  (findIndex)
 import Graphics.Gloss.Data.Point
@@ -346,3 +347,39 @@ hasSmokebombs p = playerSmokes p > 0
 -- | Update a player to have one fewer smokebombs.
 consumeSmokebomb :: Player -> Player
 consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }
+
+instance NFData NPC where
+  rnf npc               = rnf (npcName   npc) `seq`
+                          rnf (npcPos    npc) `seq`
+                          rnf (npcFacing npc) `seq`
+                          rnf (npcState  npc)
+
+instance NFData Player where
+  rnf p                 = rnf (playerNpc      p) `seq`
+                          rnf (playerUsername p) `seq`
+                          rnf (playerScore    p) `seq`
+                          rnf (playerVisited  p) `seq`
+                          rnf (playerSmokes   p)
+
+instance NFData State where
+  rnf (Walking w)       = rnf w
+  rnf (Waiting w)       = rnf w
+  rnf Dead              = ()
+  rnf (Attacking x)     = rnf x
+
+instance NFData WalkInfo where
+  rnf w                 = rnf (npcTarget   w) `seq`
+                          rnf (npcDist     w) `seq`
+                          rnf (npcVelocity w)
+
+instance NFData WaitInfo where
+  rnf w                 = rnf (npcWaiting w) `seq`
+                          rnf (npcStunned w)
+
+instance NFData ServerWorld where
+  rnf w                 = rnf (serverNpcs    w) `seq`
+                          rnf (serverPlayers w) `seq`
+                          rnf (serverMode    w)
+
+instance NFData ServerMode where
+  rnf w                 = w `seq` ()
