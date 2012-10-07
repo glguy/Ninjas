@@ -40,20 +40,25 @@ hGetClientCommand :: Handle -> IO ClientCommand
 hGetClientCommand = hGetCmd
 
 hPutClientCommand :: Handle -> ClientCommand -> IO ()
-hPutClientCommand = hPutCmd
+hPutClientCommand h x =
+  do let bs = encode x
+         n  = encode (B.length bs)
+     B.hPutStr h n
+     B.hPutStr h bs
 
 hGetServerCommand :: Handle -> IO ServerCommand
 hGetServerCommand = hGetCmd
 
-hPutServerCommand :: Handle -> ServerCommand -> IO ()
-hPutServerCommand = hPutCmd
+newtype ServerPacket = ServerPacket B.ByteString
 
-hPutCmd :: Binary a => Handle -> a -> IO ()
-hPutCmd h x = 
-  do let bs = encode x
-         n  = B.length bs
-     B.hPutStr h (encode n)
-     B.hPutStr h bs
+hPutServerPacket :: Handle -> ServerPacket -> IO ()
+hPutServerPacket h (ServerPacket bs) = B.hPutStr h bs
+
+mkServerPacket :: ServerCommand -> ServerPacket
+mkServerPacket x = ServerPacket (B.append n bs)
+  where
+  bs = encode x
+  n  = encode (B.length bs)
 
 hGetCmd :: Binary a => Handle -> IO a
 hGetCmd h =

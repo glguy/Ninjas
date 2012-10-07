@@ -295,9 +295,10 @@ nullHandles (Handles xs) = null xs
 
 announceOne :: Handles -> Int -> ServerCommand -> IO ()
 announceOne hs i msg =
+  let packet = mkServerPacket msg in
   for_ (lookupHandle i hs) $ \h ->
   handle ignoreIOException $
-  hPutServerCommand h msg
+  hPutServerPacket h packet
 
 -- Dead handles get cleaned up in 'announce'
 ignoreIOException :: IOException -> IO ()
@@ -305,9 +306,10 @@ ignoreIOException _ = return ()
 
 announce :: Handles -> ServerCommand -> IO ()
 announce hs msg =
+  let packet = mkServerPacket msg in
   forM_ (listHandles hs) $ \(_name,h) ->
      handle ignoreIOException $
-     hPutServerCommand h msg
+     hPutServerPacket h packet
 
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
 extractPlayer _ [] = Nothing
