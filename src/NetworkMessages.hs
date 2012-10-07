@@ -28,7 +28,7 @@ data ClientCommand
   
 data ServerCommand
   = ServerCommand Int Command
-  | SetWorld [(Point,Vector)]
+  | SetWorld [(Int,Point,Vector)]
   | ServerWaiting Int
   | ServerMessage String
   | ServerSmoke Point
@@ -40,33 +40,31 @@ hGetClientCommand :: Handle -> IO ClientCommand
 hGetClientCommand = hGetCmd
 
 hPutClientCommand :: Handle -> ClientCommand -> IO ()
-hPutClientCommand = hPutCmd
+hPutClientCommand h x =
+  do let bs = encode x
+         n  = encode (B.length bs)
+     B.hPutStr h n
+     B.hPutStr h bs
 
 hGetServerCommand :: Handle -> IO ServerCommand
 hGetServerCommand = hGetCmd
 
-hPutServerCommand :: Handle -> ServerCommand -> IO ()
-hPutServerCommand = hPutCmd
+newtype ServerPacket = ServerPacket B.ByteString
 
-hPutCmd :: Binary a => Handle -> a -> IO ()
-hPutCmd h x = 
-  do let bs = encode x
-         n  = B.length bs
-     B.hPutStr h (encode n)
-     B.hPutStr h bs
+hPutServerPacket :: Handle -> ServerPacket -> IO ()
+hPutServerPacket h (ServerPacket bs) = B.hPutStr h bs
+
+mkServerPacket :: ServerCommand -> ServerPacket
+mkServerPacket x = ServerPacket (B.append n bs)
+  where
+  bs = encode x
+  n  = encode (B.length bs)
 
 hGetCmd :: Binary a => Handle -> IO a
 hGetCmd h =
-  do n <- decode `fmap` hGetExact h 8
+  do n <- decode `fmap` B.hGet h 8
      bs <- B.hGet h (fromIntegral (n :: Int64))
      return $ decode bs
-
-hGetExact :: Handle -> Int -> IO B.ByteString
-hGetExact h n =
-  do bs <- B.hGet h n
-     if B.length bs == fromIntegral n
-       then return bs
-       else fmap (B.append bs) (hGetExact h n)
 
 instance Binary Command where
   put = putCommand

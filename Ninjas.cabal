@@ -17,7 +17,7 @@ data-files: images/*.bmp
 
 executable Ninjas
   main-is:             Main.hs
-  other-modules:       ListUtils, Server, Simulation, Client, NetworkMessages, Anim
+  other-modules:       Server, Simulation, Client, NetworkMessages, Anim
   hs-source-dirs:      src
   build-depends:       base         ==4.5.*,
                        binary       ==0.5.*,
@@ -26,5 +26,6 @@ executable Ninjas
                        network      ==2.3.*,
                        random       ==1.0.*,
                        time,
-                       filepath
+                       filepath,
+                       deepseq
   ghc-options:         -Wall

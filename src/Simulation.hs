@@ -2,6 +2,7 @@
 
 module Simulation where
 
+import Control.DeepSeq
 import Data.Maybe (catMaybes)
 import Data.List  (findIndex)
 import Graphics.Gloss.Data.Point
@@ -291,8 +292,8 @@ subPt (x,y) (a,b) = (x-a,y-b)
 -- and a facing unit vector. This function is used
 -- by clients who are told the parameters by the
 -- server.
-initClientNPC :: Anim.NPC -> Int -> (Point, Vector) -> ClientNPC
-initClientNPC anim npcName (npcPos, npcFacing) =
+initClientNPC :: Anim.NPC -> Int -> Point -> Vector -> ClientNPC
+initClientNPC anim npcName npcPos npcFacing =
   let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
       clientAnim = Anim.stay anim
       clientNPC = NPC { .. }
@@ -314,8 +315,8 @@ initServerNPC think npcName =
 -- | Construct a new player given an initial number
 -- of smokebombs, an identifier, a username, and a
 -- starting score.
-initPlayer :: Int -> Int -> (String,Int) -> IO Player
-initPlayer smokes name (playerUsername,playerScore) =
+initPlayer :: Int -> Int -> String -> Int -> IO Player
+initPlayer smokes name playerUsername playerScore =
   do playerNpc <- initServerNPC False name
      let playerVisited = []
          playerSmokes  = smokes
@@ -333,7 +334,8 @@ isInPillar ::
   Point {- ^ location to test -} ->
   Point {- ^ center of pillar -} ->
   Bool
-isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2) (x+pillarSize/2, y+pillarSize/2)
+isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2)
+                                  (x+pillarSize/2, y+pillarSize/2)
 
 -- | Determine the index, if any, of the pillar with contains a point.
 whichPillar :: Point -> Maybe Int
@@ -346,3 +348,39 @@ hasSmokebombs p = playerSmokes p > 0
 -- | Update a player to have one fewer smokebombs.
 consumeSmokebomb :: Player -> Player
 consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }
+
+instance NFData NPC where
+  rnf npc               = rnf (npcName   npc) `seq`
+                          rnf (npcPos    npc) `seq`
+                          rnf (npcFacing npc) `seq`
+                          rnf (npcState  npc)
+
+instance NFData Player where
+  rnf p                 = rnf (playerNpc      p) `seq`
+                          rnf (playerUsername p) `seq`
+                          rnf (playerScore    p) `seq`
+                          rnf (playerVisited  p) `seq`
+                          rnf (playerSmokes   p)
+
+instance NFData State where
+  rnf (Walking w)       = rnf w
+  rnf (Waiting w)       = rnf w
+  rnf Dead              = ()
+  rnf (Attacking x)     = rnf x
+
+instance NFData WalkInfo where
+  rnf w                 = rnf (npcTarget   w) `seq`
+                          rnf (npcDist     w) `seq`
+                          rnf (npcVelocity w)
+
+instance NFData WaitInfo where
+  rnf w                 = rnf (npcWaiting w) `seq`
+                          rnf (npcStunned w)
+
+instance NFData ServerWorld where
+  rnf w                 = rnf (serverNpcs    w) `seq`
+                          rnf (serverPlayers w) `seq`
+                          rnf (serverMode    w)
+
+instance NFData ServerMode where
+  rnf w                 = w `seq` ()

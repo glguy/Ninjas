@@ -11,16 +11,17 @@ import Network
 import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 
-import ListUtils
 import Simulation
 import qualified Anim
 
-moveButton, stopButton, attackButton, smokeButton, newGameButton :: Key
-moveButton = MouseButton LeftButton
-stopButton = MouseButton RightButton
-attackButton = Char 'a'
-smokeButton  = Char 's'
+moveButton, stopButton, attackButton, smokeButton,
+  newGameButton, clearButton :: Key
+moveButton    = MouseButton LeftButton
+stopButton    = MouseButton RightButton
+attackButton  = Char 'a'
+smokeButton   = Char 's'
 newGameButton = Char 'n'
+clearButton   = Char 'c'
 
 windowPadding :: Int
 windowPadding = 60
@@ -34,8 +35,8 @@ smokePeriod = 5
 smokeRadius :: Float
 smokeRadius = 125
 
-dingScale :: Float
-dingScale = 0.25
+textScale :: Float
+textScale = 0.25
 
 dingPosition :: Point
 dingPosition = (fst boardMin + 5, snd boardMax - 20)
@@ -67,10 +68,12 @@ clientMain (ClientEnv host port name) =
      runGame h r
 
 serverWaitingMessage :: Int -> String
-serverWaitingMessage n =
-  "Server waiting for " ++ show n ++ " more ninja" ++ if (n > 1) then "s." else "."
+serverWaitingMessage n
+  = "Server waiting for "
+ ++ show n ++ " more ninja"
+ ++ if n > 1 then "s." else "."
 
-getInitialWorld :: Handle -> IO [(Point,Vector)]
+getInitialWorld :: Handle -> IO [(Int,Point,Vector)]
 getInitialWorld h =
   do msg <- hGetServerCommand h
      case msg of
@@ -80,24 +83,27 @@ getInitialWorld h =
             getInitialWorld h
        _ -> fail "Unexpected initial message"
 
-initClientWorld :: Anim.World -> [(Point, Vector)] -> World
+initClientWorld :: Anim.World -> [(Int, Point, Vector)] -> World
 initClientWorld anim poss =
-  World { worldNpcs = zipWith (initClientNPC (Anim.npc anim)) [0..] poss
-        , dingTimers = []
+  World { worldNpcs     = [initClientNPC (Anim.npc anim) i p v
+                          | (i,p,v) <- poss ]
+        , dingTimers    = []
         , worldMessages = []
-        , smokeTimers = []
-        , appearance = anim
+        , smokeTimers   = []
+        , appearance    = anim
         }
 
 runGame :: Handle -> MVar World -> IO ()
 runGame h var =
      playIO
-       (InWindow "Ninjas" (round width + windowPadding, round height + windowPadding) (10,10))
+       (InWindow "Ninjas"
+         (round width + windowPadding, round height + windowPadding)
+         (10,10))
        black
        eventsPerSecond
        () -- "state"
        (\() -> fmap drawWorld (readMVar var))
-       (inputEvent h)
+       (inputEvent h var)
        (\t () -> modifyMVar_ var $ \w -> return $ updateClientWorld t w)
   where (width,height) = subPt boardMax boardMin
 
@@ -105,39 +111,46 @@ drawWorld      :: World -> Picture
 drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
-                : messagePictures (worldMessages w)
                 : map (drawPillar w) pillars
                ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
+               ++ messagePictures (worldMessages w)
 
 drawSmoke :: (Float, Point) -> Picture
 drawSmoke (t, pt)
   = translateV pt
   $ rotate (radToDeg t)
-  $ scale scalar scalar
-  $ pictures
+  $ scale scalar scalar smokePicture
+  where
+  scalar = smokeRadiusScalar t
+
+smokePicture :: Picture
+smokePicture =
+  pictures
       [ color (greyN 0.1 ) $ circleSolid 1
       , color (greyN 0.25)
-         $ pictures [ circle      1
-                    , line [ (0,1) , (0,-1)
-                           ]
-                    , line [ (1,0) , (-1,0)
-                           ]
+         $ pictures [ circle 1
+                    , translate s2    s2    $ arc 135 225 s
+                    , translate s2    (-s2) $ arc  45 135 s
+                    , translate (-s2) s2    $ arc 225 315 s
+                    , translate (-s2) (-s2) $ arc 315  45 s
                     ]
       ]
   where
-  scalar = smokeRadiusScalar t
+  s      = 1 / sqrt 2
+  s2     = s / sqrt 2
 
 smokeRadiusScalar :: Float -> Float
 smokeRadiusScalar t = smokeRadius * sin (t / (smokePeriod / pi))
 
-messagePictures :: [String] -> Picture
-messagePictures msgs = pictures (zipWith messagePicture [0..] msgs)
+messagePictures :: [String] -> [Picture]
+messagePictures msgs = zipWith messagePicture [0..] msgs
 
 messagePicture :: Int -> String -> Picture
 messagePicture i msg
-  = translate (fst boardMin + 5) (snd boardMin + 5 + textHeight * fromIntegral i)
-  $ scale 0.25 0.25
+  = translate (fst boardMin + 5)
+              (snd boardMin + 5 + textHeight * fromIntegral i)
+  $ scale textScale textScale
   $ color (greyN gray)
   $ text msg
   where
@@ -149,7 +162,7 @@ dingPicture :: Int -> Picture
 dingPicture n =
   pictures [ translateV dingPosition
            $ translate (5 * fromIntegral i) (- 5 * fromIntegral i)
-           $ scale dingScale dingScale
+           $ scale textScale textScale
            $ color white
            $ text "DING"
            | i <- [0..n-1]]
@@ -160,7 +173,8 @@ drawPillar w pt
   $ Anim.curFrame $ Anim.tower $ appearance w
 
 borderPicture  :: Picture
-borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width) (2 * ninjaRadius + height)
+borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width)
+                                            (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
 drawNPC :: [(Float, Point)] -> ClientNPC -> Picture
@@ -175,9 +189,10 @@ drawNPC smokes cnpc
   where npc   = clientNPC cnpc
         state = npcState npc
 
-        smokeCovering (t,pt) = magV (subPt pt (npcPos npc)) + ninjaRadius <= smokeRadiusScalar t
+        distance a b = magV (subPt a b)
+        smokeCovering (t,pt) =
+          distance pt (npcPos npc) + ninjaRadius <= smokeRadiusScalar t
         covered = any smokeCovering smokes
-
 
         rads = argV $ npcFacing npc
 
@@ -204,14 +219,18 @@ translateV (x,y) = translate x y
 arcRad :: Float -> Float -> Float -> Picture
 arcRad a b = arc (radToDeg a) (radToDeg b)
 
-inputEvent     :: Handle -> Event -> () -> IO ()
-inputEvent h (EventKey k Down _ pos) ()
+inputEvent     :: Handle -> MVar World -> Event -> () -> IO ()
+inputEvent h var (EventKey k Down _ pos) ()
   | k == moveButton   = hPutClientCommand h (ClientCommand (Move (0,0) pos))
   | k == stopButton   = hPutClientCommand h (ClientCommand Stop      )
   | k == attackButton = hPutClientCommand h (ClientCommand Attack    )
   | k == smokeButton  = hPutClientCommand h (ClientSmoke             )
   | k == newGameButton = hPutClientCommand h NewGame
-inputEvent _ _ () = return ()
+  | k == clearButton  = clearMessages var
+inputEvent _ _ _ () = return ()
+
+clearMessages :: MVar World -> IO ()
+clearMessages var = modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
@@ -234,7 +253,7 @@ newNpcState :: Anim.NPC -> NPC -> ClientNPC
 newNpcState looks clientNPC = ClientNPC { .. }
   where
   clientAnim = case npcState clientNPC of
-                 Walking {} -> Anim.walk looks
+                 Walking {}               -> Anim.walk looks
                  Waiting w | npcStunned w -> Anim.stun   looks
                            | otherwise    -> Anim.stay   looks
                  Attacking {}             -> Anim.attack looks
@@ -243,25 +262,33 @@ newNpcState looks clientNPC = ClientNPC { .. }
 clientUpdates :: Handle -> MVar World -> IO ()
 clientUpdates h var = forever $
   do c <- hGetServerCommand h
-     case c of
-       ServerReady -> modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
-       ServerCommand name cmd ->
-         modifyMVar_ var $ \w ->
-           return $ w { worldNpcs = updateList name (npcCommand w cmd) $ worldNpcs w }
-       ServerMessage txt -> modifyMVar_ var $ \w -> return $ w { worldMessages = txt : worldMessages w }
-       ServerDing        -> modifyMVar_ var $ \w -> return $ w { dingTimers = dingPeriod : dingTimers w }
-       ServerSmoke pt    -> modifyMVar_ var $ \w -> return $ w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
-       SetWorld poss ->
-        modifyMVar_ var $ \w -> return $ initClientWorld (appearance w) poss
-       _ -> return ()
+     modifyMVar_ var $ \w -> return $! processCmd w c
+
   where
+
+  processCmd w c =
+    case c of
+      ServerReady       -> w { worldMessages = [] }
+      ServerMessage txt -> w { worldMessages = txt : worldMessages w }
+      ServerDing        -> w { dingTimers = dingPeriod : dingTimers w }
+      ServerSmoke pt    -> w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
+      SetWorld poss     -> initClientWorld (appearance w) poss
+      ServerCommand i m -> let f = npcCommand w m
+                           in w { worldNpcs = updateNpcList i f $ worldNpcs w }
+      _                 -> w
+
   npcCommand w cmd cnpc =
     let npc = clientNPC cnpc
     in newNpcState (Anim.npc $ appearance w) $
        case cmd of
-         Move from to -> walkingNPC npc { npcPos = from } to
-         Stop     -> waitingNPC npc Nothing False
-         Stun     -> stunnedNPC npc
-         Die      -> deadNPC npc
-         Attack   -> attackNPC npc
+         Move from to   -> walkingNPC npc { npcPos = from } to
+         Stop           -> waitingNPC npc Nothing False
+         Stun           -> stunnedNPC npc
+         Die            -> deadNPC npc
+         Attack         -> attackNPC npc
 
+updateNpcList :: Int -> (ClientNPC -> ClientNPC) -> [ClientNPC] -> [ClientNPC]
+updateNpcList _ _ [] = []
+updateNpcList i f (n:ns)
+  | npcName (clientNPC n) == i = f n : ns
+  | otherwise      = n : updateNpcList i f ns
