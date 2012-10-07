@@ -9,6 +9,7 @@ import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
 import System.Random (randomRIO)
 
+import qualified Anim
 import NetworkMessages
 
 -- | Smallest point on the board
@@ -95,11 +96,18 @@ data WalkInfo = Walk { npcTarget    :: Point
 data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
   deriving (Show, Read, Eq)
 
+
+data ClientNPC = ClientNPC
+  { clientNPC        :: NPC
+  , clientAnim       :: Anim.Animation
+  }
+
 data World = World
-  { worldNpcs        :: [NPC]
+  { worldNpcs        :: [ClientNPC]
   , dingTimers       :: [Float]
   , smokeTimers      :: [(Float, Point)]
   , worldMessages    :: [String]
+  , npcAppearance    :: Anim.NPC
   }
 
 data ServerWorld = ServerWorld
@@ -113,6 +121,8 @@ data ServerMode = Playing | Starting | Stopped
 
 data ThinkTask = ChooseWait | ChooseDestination
 
+
+
 -- | Compute a new NPC given a number of elapsed seconds. An optional
 -- update task will be returned if the server should compute a new
 -- goal for the NPC. Clients will ignore this task and wait for the
@@ -120,38 +130,40 @@ data ThinkTask = ChooseWait | ChooseDestination
 updateNPC' ::
   Float {- ^ elapsed seconds -} ->
   NPC   ->
-  (NPC, Maybe ThinkTask)
+  (NPC, Bool, Maybe ThinkTask) -- (new npc, did we change states, AI task)
 updateNPC' elapsed npc =
   case state of
     Walking w
-      | npcDist w < step -> done ChooseWait
-      | otherwise -> working (Walking w { npcDist = npcDist w - step })
-                             npc { npcPos = addPt (mulSV elapsed (npcVelocity w)) (npcPos npc) }
+      | npcDist w < step -> done (Just ChooseWait)
+      | otherwise ->
+        working (Walking w { npcDist = npcDist w - step })
+                npc { npcPos = newPos }
 
       where step = elapsed * speed
+            newPos = addPt (mulSV elapsed (npcVelocity w)) (npcPos npc)
+
     Waiting w ->
       case npcWaiting w of
         Nothing -> working state npc
         Just todo
-          | todo < elapsed -> done ChooseDestination
+          | todo < elapsed -> done (Just ChooseDestination)
           | otherwise ->
               working (Waiting w { npcWaiting = Just (todo - elapsed) }) npc
 
 
     Attacking delay
-      | elapsed > delay -> (waitingNPC npc Nothing False                  , Nothing)
-      | otherwise       -> (npc { npcState = Attacking (delay - elapsed)} , Nothing)
+      | elapsed > delay -> done Nothing
+      | otherwise       -> working (Attacking (delay - elapsed)) npc
 
-    Dead -> (npc, Nothing)
+    Dead -> working state npc
 
-  where 
-
-        state = npcState npc
-
-        done next = (npc { npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False } }
-                    , Just next)
-
-        working s n = (n { npcState = s}, Nothing)
+  where
+  state       = npcState npc
+  done next   = (npc { npcState = Waiting Wait { npcWaiting = Nothing
+                                               , npcStunned = False } }
+                , True
+                , next)
+  working s n = (n { npcState = s}, False, Nothing)
 
 -- | Lift a function on NPCs to one on Players
 mapPlayerNpc :: (NPC -> NPC) -> Player -> Player
@@ -279,10 +291,12 @@ subPt (x,y) (a,b) = (x-a,y-b)
 -- and a facing unit vector. This function is used
 -- by clients who are told the parameters by the
 -- server.
-initClientNPC :: Int -> (Point, Vector) -> NPC
-initClientNPC npcName (npcPos, npcFacing) =
+initClientNPC :: Anim.NPC -> Int -> (Point, Vector) -> ClientNPC
+initClientNPC anim npcName (npcPos, npcFacing) =
   let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
-  in  NPC { .. }
+      clientAnim = Anim.stay anim
+      clientNPC = NPC { .. }
+  in  ClientNPC { .. }
 
 -- | Construct a new NPC given a name, a position,
 -- and a facing unit vector. When think is True,

@@ -227,7 +227,7 @@ isWinner p = length (playerVisited p) == length pillars
 
 updateNPC :: Handles -> Float -> Bool -> NPC -> IO NPC
 updateNPC hs t think npc =
-  do let (npc',mbTask) = updateNPC' t npc
+  do let (npc',_,mbTask) = updateNPC' t npc
 
      case guard think >> mbTask of
 
@@ -278,17 +278,16 @@ announceOne hs i msg =
   for_ (lookupHandle i hs) $ \h ->
   handle ignoreIOException $
   hPutServerCommand h msg
-  where
-  -- Dead handles get cleaned up in 'announce'
-  ignoreIOException :: IOException -> IO ()
-  ignoreIOException _ = return ()
+
+-- Dead handles get cleaned up in 'announce'
+ignoreIOException :: IOException -> IO ()
+ignoreIOException _ = return ()
 
 announce :: Handles -> ServerCommand -> IO ()
 announce hs msg =
   forM_ (listHandles hs) $ \(_name,h) ->
+     handle ignoreIOException $
      hPutServerCommand h msg
-     `catch` \ e ->
-     putStrLn $ "announce: Socket error ("++show (e :: IOException)++"), dropping connection"
 
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
 extractPlayer _ [] = Nothing
@@ -322,4 +321,5 @@ eventLoop env hs w events lastTick
 
   logic (ClientDisconnect name) =
     do let hs' = removeHandle name hs
+       putStrLn $ "Client disconnect with id " ++ show name
        eventLoop env hs' w events lastTick
