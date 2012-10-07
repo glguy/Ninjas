@@ -6,8 +6,8 @@ import Control.Exception
 import Control.Monad
 import Data.List (intercalate, sortBy)
 import Data.Foldable (for_)
-import Data.Function (on)
 import Data.Maybe (fromMaybe)
+import Data.Ord (comparing)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
@@ -136,7 +136,8 @@ updateWorldForCommand env i hs w msg =
        _          -> return w
 
 serverScores :: ServerWorld -> [(String,Int)]
-serverScores w = [ (playerUsername p, playerScore p) | p <- serverPlayers w ]
+serverScores w = [ (playerUsername p, playerScore p)
+                 | p <- sortBy (comparing (npcName . playerNpc)) (serverPlayers w) ]
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
@@ -187,7 +188,7 @@ updateServerWorld hs t w
                             $ commas (map playerUsername winners) ++ " wins " ++ reason
                    announce hs
                       $ ServerMessage
-                      $ commas $ map prettyScore $ reverse $ sortBy (compare `on` playerScore) ps
+                      $ commas $ map prettyScore $ reverse $ sortBy (comparing playerScore) ps
                    return ps
 
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs    w
