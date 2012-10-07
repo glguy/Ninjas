@@ -1,14 +1,14 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
-import Control.Concurrent
+import Control.Concurrent (forkIO, threadDelay, Chan, newChan, readChan, writeChan)
 import Control.Exception
 import Control.Monad
 import Data.List (intercalate, sortBy)
 import Data.Foldable (for_)
 import Data.Function (on)
 import Data.Maybe (fromMaybe)
-import Data.Time.Clock (diffUTCTime, getCurrentTime)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
 import Prelude hiding (catch)
@@ -34,36 +34,37 @@ defaultServerEnv = ServerEnv
 
 serverMain :: ServerEnv -> Int -> IO ()
 serverMain env n = do
-  sock     <- listenOn (PortNumber (fromIntegral (serverPort env)))
-  sockName <- getSocketName sock
-  putStrLn $ "Server listening for ninjas on " ++ show sockName
-  _ <- forkIO $ do
-    (hs, names) <- getConnections sock n
-    sClose sock
 
-    (w,msgs) <- newGame env [ (p,0) | p <- names ]
-    var <- newMVar w
+  (hs, names) <- startNetwork env n
 
-    -- these handles are only to be used for reading
-    rawHs <- unsafeReadHandles hs
-    forM_ rawHs $ \(i,h) ->
-       forkIO $ clientSocketLoop env i hs h var
+  (w,msgs) <- newGame env [ (p,0) | p <- names ]
+  events <- newChan
 
-    mapM_ (announce hs) msgs
+  -- these handles are only to be used for reading
+  forM_ (listHandles hs) $ \(i,h) -> forkIO $ clientSocketLoop i h events
+  mapM_ (announce hs) msgs
 
-    readyCountdown hs var
+  w' <- readyCountdown hs w
+  lastTick <- getCurrentTime
+  _tickThreadId <- forkIO $ tickThread events
+  eventLoop env hs w' events lastTick
 
-    runServer hs var
+startNetwork :: ServerEnv -> Int -> IO (Handles, [String])
+startNetwork env n =
+  do sock     <- listenOn (PortNumber (fromIntegral (serverPort env)))
+     sockName <- getSocketName sock
+     putStrLn $ "Server listening for ninjas on " ++ show sockName
+     (hs, names) <- getConnections sock n
+     sClose sock
+     return (hs, names)
 
-  forever (threadDelay (10 * 10000000))
-
-readyCountdown :: Handles -> MVar ServerWorld -> IO ()
-readyCountdown hs var =
+readyCountdown :: Handles -> ServerWorld -> IO ServerWorld
+readyCountdown hs w =
   do forM_ ["3","2","1", "Capture the Diamonds!"] $ \txt ->
        do announce hs $ ServerMessage txt
           threadDelay 600000
      announce hs ServerReady
-     modifyMVar_ var $ \w -> return w { serverMode = Playing }
+     return w { serverMode = Playing }
 
 newGame :: ServerEnv -> [(String,Int)] -> IO (ServerWorld, [ServerCommand])
 newGame env scores =
@@ -80,68 +81,66 @@ isStuckPlayer p =
     Attacking {}  -> True
     _             -> False
 
-clientSocketLoop ::
-  ServerEnv -> Int -> Handles -> Handle -> MVar ServerWorld -> IO ()
-clientSocketLoop env i hs h var =
-  forever processOne
-  `catch` \ e ->
-  putStrLn $ "Read loop: Socket error ("++show (e :: IOException)++"), dropping connection"
-  where
-  processOne = do
-     msg  <- hGetClientCommand h
-     join $ modifyMVar var $ \w ->
-       let (me,them) = fromMaybe (error ("clientSocketLoop: Lost player " ++ show i))
-                     $ extractPlayer i $ serverPlayers w
-           mapPlayer f = w { serverPlayers = f me : them }
-           returnAnd x m = return (x,m)
+clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
+clientSocketLoop i h events =
+  forever (do c <- hGetClientCommand h
+              writeChan events (ClientEvent i c))
+  `finally`
+  writeChan events (ClientDisconnect i)
+     
 
-       in case msg of
-            NewGame | serverMode w == Stopped ->
+updateWorldForCommand :: ServerEnv -> Int -> Handles -> ServerWorld -> ClientCommand -> IO ServerWorld
+updateWorldForCommand env i hs w msg =
+  do let (me,them) = fromMaybe (error ("clientSocketLoop: Lost player " ++ show i))
+                   $ extractPlayer i $ serverPlayers w
+         mapPlayer f = w { serverPlayers = f me : them }
+
+     case msg of
+       NewGame | serverMode w == Stopped ->
                         do (w',m) <- newGame env $ serverScores w
-                           returnAnd w' $ do forM_ m $ announce hs
-                                             readyCountdown hs var
+                           forM_ m $ announce hs
+                           readyCountdown hs w'
 
-            _       | serverMode w /= Playing || isStuckPlayer me -> returnAnd w $ return ()
+       _       | serverMode w /= Playing || isStuckPlayer me -> return w
 
-            ClientSmoke
+       ClientSmoke
               | hasSmokebombs me ->
-                   let w' = mapPlayer consumeSmokebomb
-                   in returnAnd w' $ announce hs $ ServerSmoke $ npcPos $ playerNpc me
+                   do announce hs $ ServerSmoke $ npcPos $ playerNpc me
+                      return $ mapPlayer consumeSmokebomb
 
-            ClientCommand cmd -> case cmd of
+       ClientCommand cmd -> case cmd of
               Move _ pos0
                 -- Disregard where the player says he is moving from
                 | pointInBox pos boardMin boardMax ->
-                        let w' = mapPlayer $ mapPlayerNpc $ \npc -> walkingNPC npc pos
-                        in returnAnd w' $ announce hs $ ServerCommand i $ Move (npcPos (playerNpc me)) pos
+                    do announce hs $ ServerCommand i $ Move (npcPos (playerNpc me)) pos
+                       return $ mapPlayer $ mapPlayerNpc $ \npc -> walkingNPC npc pos
                 where
                 pos = constrainPoint (npcPos (playerNpc me)) pos0
 
-              Stop     -> let w' = mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
-                          in returnAnd w' $ announce hs $ ServerCommand i cmd
+              Stop     ->
+                    do announce hs $ ServerCommand i cmd
+                       return $ mapPlayer $ mapPlayerNpc $ \npc -> waitingNPC npc Nothing False
 
-              Attack   -> let (me', them', npcs', cmds, kills)
+              Attack   ->
+                       do let (me', them', npcs', cmds, kills)
                                  = performAttack me them (serverNpcs w)
-                              w' = w { serverPlayers = me' : them'
+                          forM_ cmds  $ announce hs
+                          forM_ kills $ \killed ->
+                              let killer = playerUsername me in
+                              announceOne hs killed $ ServerMessage $ "Killed by " ++ killer
+                          return $ w { serverPlayers = me' : them'
                                      , serverNpcs    = npcs'
                                      }
-                          in returnAnd w'
-                            $ do forM_ cmds  $ announce hs
-                                 forM_ kills $ \killed ->
-                                     let killer = playerUsername me in
-                                     announceOne hs killed
-                                       $ ServerMessage $ "Killed by " ++ killer
 
-              _        -> returnAnd w $ return ()
-            _          -> returnAnd w $ return ()
+              _        -> return w
+       _          -> return w
 
 serverScores :: ServerWorld -> [(String,Int)]
 serverScores w = [ (playerUsername p, playerScore p) | p <- serverPlayers w ]
 
 getConnections :: Socket -> Int -> IO (Handles,[String])
 getConnections s n =
-  do var <- newMVar []
-     aux (Handles var) [] n
+  do aux emptyHandles [] n
   where
   aux hs names 0 = return (hs, names)
   aux hs names i =
@@ -151,19 +150,12 @@ getConnections s n =
        ClientJoin name <- hGetClientCommand h
        putStrLn $ "Got connection from " ++ name ++ "@" ++ host ++ ":" ++ show port
        let i' = i - 1
-       addHandle i' h hs
-       aux hs (name:names) i'
+       aux (addHandle i' h hs) (name:names) i'
 
-runServer :: Handles -> MVar ServerWorld -> IO a
-runServer hs w = loop =<< getCurrentTime
-  where
-  loop lastTime =
-    do thisTime <- getCurrentTime
-       let elapsed :: Float
-           elapsed = realToFrac $ diffUTCTime thisTime lastTime
-       modifyMVar_ w $ updateServerWorld hs elapsed
-       threadDelay $ truncate $ 1000000 / fromIntegral eventsPerSecond - elapsed
-       loop thisTime
+tickThread :: Chan ServerEvent -> IO ()
+tickThread events =
+  forever $ do writeChan events ServerTick
+               threadDelay $ 1000000 `div` eventsPerSecond
 
 initServerWorld :: ServerEnv -> [(String,Int)] -> IO ServerWorld
 initServerWorld env scores =
@@ -259,34 +251,43 @@ constrainPoint from
   where
   aux f x p = fromMaybe p (f from p x)
 
-newtype Handles = Handles (MVar [(Int,Handle)])
+newtype Handles = Handles { listHandles :: [(Int,Handle)] }
 
-addHandle :: Int -> Handle -> Handles -> IO ()
-addHandle i h (Handles var) = modifyMVar_ var $ \hs -> return ((i,h):hs)
+emptyHandles :: Handles
+emptyHandles = Handles []
 
-unsafeReadHandles :: Handles -> IO [(Int,Handle)]
-unsafeReadHandles (Handles var) = readMVar var
+addHandle :: Int -> Handle -> Handles -> Handles
+addHandle i h (Handles hs) = Handles ((i,h):hs)
+
+removeHandle :: Int -> Handles -> Handles
+removeHandle i (Handles hs) = Handles (aux hs)
+  where
+  aux [] = []
+  aux (x:xs)
+    | i == fst x = xs
+    | otherwise  = x : aux xs
+
+lookupHandle :: Int -> Handles -> Maybe Handle
+lookupHandle i (Handles xs) = lookup i xs
+
+nullHandles :: Handles -> Bool
+nullHandles (Handles xs) = null xs
 
 announceOne :: Handles -> Int -> ServerCommand -> IO ()
-announceOne (Handles var) i msg =
-  withMVar var             $ \hs ->
-  for_ (lookup i hs)       $ \h ->
+announceOne hs i msg =
+  for_ (lookupHandle i hs) $ \h ->
   handle ignoreIOException $
   hPutServerCommand h msg
-  where
-  -- Dead handles get cleaned up in 'announce'
-  ignoreIOException :: IOException -> IO ()
-  ignoreIOException _ = return ()
+
+-- Dead handles get cleaned up in 'announce'
+ignoreIOException :: IOException -> IO ()
+ignoreIOException _ = return ()
 
 announce :: Handles -> ServerCommand -> IO ()
-announce (Handles var) msg =
-  modifyMVar_ var  $ \hs ->
-  flip filterM hs  $ \(_name,h) ->
-     do hPutServerCommand h msg
-        return True
-      `catch` \ e ->
-     do putStrLn $ "announce: Socket error ("++show (e :: IOException)++"), dropping connection"
-        return False
+announce hs msg =
+  forM_ (listHandles hs) $ \(_name,h) ->
+     handle ignoreIOException $
+     hPutServerCommand h msg
 
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
 extractPlayer _ [] = Nothing
@@ -294,3 +295,31 @@ extractPlayer i (p:ps)
   | npcName (playerNpc p) == i = return (p,ps)
   | otherwise = do (x,xs) <- extractPlayer i ps
                    return (x,p:xs)
+
+data ServerEvent
+  = ServerTick
+  | ClientDisconnect
+      Int -- client id
+  | ClientEvent
+      Int -- client id
+      ClientCommand -- received command
+
+eventLoop :: ServerEnv -> Handles -> ServerWorld -> Chan ServerEvent -> UTCTime -> IO ()
+eventLoop env hs w events lastTick
+  | nullHandles hs = return ()
+  | otherwise      = logic =<< readChan events
+  where
+  logic ServerTick =
+    do now <- getCurrentTime
+       let elapsed = realToFrac (diffUTCTime now lastTick)
+       w' <- updateServerWorld hs elapsed w
+       eventLoop env hs w' events now
+
+  logic (ClientEvent name msg) =
+    do w' <- updateWorldForCommand env name hs w msg
+       eventLoop env hs w' events lastTick
+
+  logic (ClientDisconnect name) =
+    do let hs' = removeHandle name hs
+       putStrLn $ "Client disconnect with id " ++ show name
+       eventLoop env hs' w events lastTick
