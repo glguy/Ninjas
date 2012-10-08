@@ -5,7 +5,7 @@ import Control.DeepSeq (rnf)
 import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
 import Control.Exception (IOException, handle, bracket_)
-import Control.Monad
+import Control.Monad (forM_, when, guard, forever)
 import Data.List (intercalate, sortBy, (\\))
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
@@ -35,30 +35,38 @@ defaultServerEnv = ServerEnv
   , shutdownOnEmpty   = False
   }
 
+-- | Main entry point for server
 serverMain :: ServerEnv -> IO ()
-serverMain env = do
-  events <- newChan
-  _acceptThreadId <- startNetwork env events
-  lastTick <- getCurrentTime
-  _tickThreadId <- forkIO $ tickThread events
-  w <- initServerWorld env []
-  eventLoop env emptyHandles w events lastTick
+serverMain env =
+  do events             <- newChan
+     _acceptThreadId    <- startNetwork env events
+     lastTick           <- getCurrentTime
+     _tickThreadId      <- forkIO $ tickThread events
+     w                  <- initServerWorld env []
+     eventLoop env emptyHandles w events lastTick
 
+-- | Create a thread which will accept new connections.
+-- Connections and disconnections will be announced to the event channel.
 startNetwork :: ServerEnv -> Chan ServerEvent -> IO ThreadId
 startNetwork env events =
-  do sock     <- listenOn (PortNumber (fromIntegral (serverPort env)))
-     sockName <- getSocketName sock
+  do sock       <- listenOn (PortNumber (fromIntegral (serverPort env)))
+     sockName   <- getSocketName sock
      putStrLn $ "Server listening for ninjas on " ++ show sockName
-     forkIO $ forM_ [0..] $ \i ->
-       do (h,host,port) <- accept sock
-          hSetBuffering h NoBuffering
-          forkIO $
-            do ClientJoin name <- hGetClientCommand h
-               putStrLn $ concat ["Got connection from ",
+     forkIO $ mapM_ (acceptClient events sock) [0..]
+
+-- | Accept a connection and create a thread to manage incoming data
+-- from that connection.
+acceptClient :: Chan ServerEvent -> Socket -> Int -> IO ThreadId
+acceptClient events sock i =
+  do (h,host,port) <- accept sock
+     hSetBuffering h NoBuffering
+     forkIO $
+       do ClientJoin name <- hGetClientCommand h
+          putStrLn $ concat ["Got connection from ",
                                   name, "@", host, ":", show port]
-               bracket_ (writeChan events $ JoinEvent i name h)
-                        (writeChan events $ DisconnectEvent i)
-                        (clientSocketLoop i h events)
+          bracket_ (writeChan events $ JoinEvent i name h)
+                   (writeChan events $ DisconnectEvent i)
+                   (clientSocketLoop i h events)
 
 clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
 clientSocketLoop i h events =
@@ -149,15 +157,15 @@ updateWorldForCommand env i hs w msg =
                          $ ServerMessage $ "Killed by " ++ killer
                   
                   let winningAttack = all isDeadPlayer them'
-                  them'' <- if winningAttack
-                            then endGame hs [me] them' "force"
-                            else return them'
+                  everyone <- if winningAttack
+                            then endGame hs [me'] (me' : them') "force"
+                            else return $ me' : them'
 
                   let mode
                         | winningAttack = Stopped
                         | otherwise     = Playing
 
-                  return $ w { serverPlayers = me' : them''
+                  return $ w { serverPlayers = everyone
                              , serverNpcs    = npcs'
                              , serverMode    = mode
                              }
