@@ -110,7 +110,9 @@ updateWorldForCommand env i hs w msg =
          mapMyNpc = mapPlayer . mapPlayerNpc
 
      case msg of
-       NewGame | serverMode w == Stopped ->
+       NewGame | serverMode w == Stopped
+                 || not (isInLobby i w)
+                    && length (serverPlayers w) == 1 ->
                         do (w',m) <- newGame env w
                            forM_ m $ announce hs
                            readyCountdown hs w'
@@ -199,10 +201,16 @@ updateServerWorld hs t w
                      $ reverse $ sortBy (comparing playerScore) ps
                    return ps
 
+        when (null pcs2) $ announce hs $ ServerMessage "Game Over"
+
+        let mode'
+              | not (null winners) || null pcs2 = Stopped
+              | otherwise                       = Playing
+
         npcs' <- mapM (updateNPC hs t True) $ serverNpcs w
         return w { serverPlayers = pcs2
                  , serverNpcs    = npcs'
-                 , serverMode    = if null winners then Playing else Stopped
+                 , serverMode    = mode'
                  }
 
 prettyScore :: Player -> String
@@ -335,8 +343,12 @@ eventLoop env hs w events lastTick
     do let hs' = addHandle i h hs
            w'  = w { serverLobby = (i,user):serverLobby w }
            env' = env { shutdownOnEmpty = True }
-       announce hs' $ generateSetWorld w
-       announce hs' $ ServerMessage $ user ++ " joined"
+       announceOne hs' i $ generateSetWorld w
+       forM_ (serverLobby w) $ \(_,u) ->
+         announceOne hs' i $ ServerMessage $ u ++ " in lobby"
+       forM_ (serverPlayers w) $ \p ->
+         announceOne hs' i $ ServerMessage $ playerUsername p ++ " in game"
+       announce hs' $ ServerMessage $ user ++ " joined lobby"
        eventLoop env' hs' w' events lastTick
 
   logic ServerTick =
