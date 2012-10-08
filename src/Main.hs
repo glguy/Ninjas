@@ -24,15 +24,15 @@ main =
 usage :: IO a
 usage =
   do putStrLn "Usage:"
-     putStr $ usageInfo "Ninjas server [FLAGS] NUM_NINJAS"        serverOpts
+     putStr $ usageInfo "Ninjas server [FLAGS]"                   serverOpts
      putStr $ usageInfo "Ninjas client [FLAGS] [HOSTNAME [PORT]]" clientOpts
      exitFailure
 
 launchServer :: [String] -> IO ()
 launchServer args =
   case getOpt Permute serverOpts args of
-    (fs, [n], []) -> serverMain (funs defaultServerEnv fs) (read n)
-    (_ , _  , es) -> mapM_ putStrLn es >> usage
+    (fs, [], []) -> serverMain (funs defaultServerEnv fs)
+    (_ , _ , es) -> mapM_ putStrLn es >> usage
   where
   funs = foldl (\acc f -> f acc)
 

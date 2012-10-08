@@ -114,7 +114,8 @@ data World = World
 data ServerWorld = ServerWorld
   { serverNpcs    :: [NPC]
   , serverPlayers :: [Player]
-  , serverMode   :: ServerMode
+  , serverMode    :: ServerMode
+  , serverLobby   :: [(Int,String)]
   }
 
 data ServerMode = Playing | Starting | Stopped
@@ -380,7 +381,8 @@ instance NFData WaitInfo where
 instance NFData ServerWorld where
   rnf w                 = rnf (serverNpcs    w) `seq`
                           rnf (serverPlayers w) `seq`
-                          rnf (serverMode    w)
+                          rnf (serverMode    w) `seq`
+                          rnf (serverLobby   w)
 
 instance NFData ServerMode where
   rnf w                 = w `seq` ()

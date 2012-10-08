@@ -2,11 +2,11 @@
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
 import Control.DeepSeq (rnf)
-import Control.Concurrent (forkIO, threadDelay,
+import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
 import Control.Exception
 import Control.Monad
-import Data.List (intercalate, sortBy)
+import Data.List (intercalate, sortBy, (\\))
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
@@ -25,6 +25,7 @@ data ServerEnv = ServerEnv
   { npcCount          :: Int
   , initialSmokebombs :: Int
   , serverPort        :: Int
+  , shutdownOnEmpty   :: Bool
   }
 
 defaultServerEnv :: ServerEnv
@@ -32,33 +33,39 @@ defaultServerEnv = ServerEnv
   { npcCount          = 10
   , initialSmokebombs = 1
   , serverPort        = 16000
+  , shutdownOnEmpty   = False
   }
 
-serverMain :: ServerEnv -> Int -> IO ()
-serverMain env n = do
-
-  (hs, names) <- startNetwork env n
-
-  (w,msgs) <- newGame env [ (i,p,0) | (i,p) <- zip [0..] names ]
+serverMain :: ServerEnv -> IO ()
+serverMain env = do
   events <- newChan
-
-  -- these handles are only to be used for reading
-  forM_ (listHandles hs) $ \(i,h) -> forkIO $ clientSocketLoop i h events
-  mapM_ (announce hs) msgs
-
-  w' <- readyCountdown hs w
+  _acceptThreadId <- startNetwork env events
   lastTick <- getCurrentTime
   _tickThreadId <- forkIO $ tickThread events
-  eventLoop env hs w' events lastTick
+  w <- initServerWorld env []
+  eventLoop env emptyHandles w events lastTick
 
-startNetwork :: ServerEnv -> Int -> IO (Handles, [String])
-startNetwork env n =
+startNetwork :: ServerEnv -> Chan ServerEvent -> IO ThreadId
+startNetwork env events =
   do sock     <- listenOn (PortNumber (fromIntegral (serverPort env)))
      sockName <- getSocketName sock
      putStrLn $ "Server listening for ninjas on " ++ show sockName
-     (hs, names) <- getConnections sock n
-     sClose sock
-     return (hs, names)
+     forkIO $ forM_ [0..] $ \i ->
+       do (h,host,port) <- accept sock
+          hSetBuffering h NoBuffering
+          forkIO $
+            do ClientJoin name <- hGetClientCommand h
+               putStrLn $ concat ["Got connection from ",
+                                  name, "@", host, ":", show port]
+               writeChan events $ JoinEvent i name h
+               clientSocketLoop i h events
+
+clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
+clientSocketLoop i h events =
+  forever (do c <- hGetClientCommand h
+              writeChan events (ClientEvent i c))
+  `catch` \(SomeException _) ->
+  writeChan events (ClientDisconnect i)
 
 readyCountdown :: Handles -> ServerWorld -> IO ServerWorld
 readyCountdown hs w =
@@ -68,11 +75,16 @@ readyCountdown hs w =
      announce hs ServerReady
      return w { serverMode = Playing }
 
-newGame :: ServerEnv -> [(Int,String,Int)] -> IO (ServerWorld, [ServerCommand])
-newGame env scores =
-  do w <- initServerWorld env scores
-     return (w, [ SetWorld [(npcName npc, npcPos npc, npcFacing npc)
-                           | npc <- allNpcs w] ])
+newGame :: ServerEnv -> ServerWorld -> IO (ServerWorld, [ServerCommand])
+newGame env w =
+  do let scores = serverScores w
+               ++ [(i,u,0) | (i,u) <- serverLobby w]
+     w' <- initServerWorld env scores
+     return (w', [generateSetWorld w'])
+
+generateSetWorld :: ServerWorld -> ServerCommand
+generateSetWorld w =
+  SetWorld [(npcName npc, npcPos npc, npcFacing npc) | npc <- allNpcs w]
 
 allNpcs :: ServerWorld -> [NPC]
 allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
@@ -83,14 +95,6 @@ isStuckPlayer p =
     Dead          -> True
     Attacking {}  -> True
     _             -> False
-
-clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
-clientSocketLoop i h events =
-  forever (do c <- hGetClientCommand h
-              writeChan events (ClientEvent i c))
-  `catch` \(SomeException _) ->
-  writeChan events (ClientDisconnect i)
-     
 
 updateWorldForCommand ::
   ServerEnv ->
@@ -107,9 +111,10 @@ updateWorldForCommand env i hs w msg =
 
      case msg of
        NewGame | serverMode w == Stopped ->
-                        do (w',m) <- newGame env $ serverScores w
+                        do (w',m) <- newGame env w
                            forM_ m $ announce hs
                            readyCountdown hs w'
+               | otherwise -> return w
 
        _       | serverMode w /= Playing || isStuckPlayer me -> return w
 
@@ -152,21 +157,6 @@ serverScores :: ServerWorld -> [(Int,String,Int)]
 serverScores w = [ (npcName (playerNpc p), playerUsername p, playerScore p)
                  | p <- serverPlayers w ]
 
-getConnections :: Socket -> Int -> IO (Handles,[String])
-getConnections s n =
-  do aux emptyHandles [] n
-  where
-  aux hs names 0 = return (hs, names)
-  aux hs names i =
-    do announce hs $ ServerWaiting i
-       (h,host,port) <- accept s
-       hSetBuffering h LineBuffering
-       ClientJoin name <- hGetClientCommand h
-       putStrLn $ concat ["Got connection from ",
-                          name, "@", host, ":", show port]
-       let i' = i - 1
-       aux (addHandle i' h hs) (name:names) i'
-
 tickThread :: Chan ServerEvent -> IO ()
 tickThread events =
   forever $ do writeChan events ServerTick
@@ -174,12 +164,13 @@ tickThread events =
 
 initServerWorld :: ServerEnv -> [(Int,String,Int)] -> IO ServerWorld
 initServerWorld env scores =
-  do let playerCount = length scores
+  do let npcIds      = take (npcCount env)
+                     $ [0..] \\ [i | (i,_,_) <- scores]
      let newPlayer   = initPlayer (initialSmokebombs env)
+         serverMode  = Stopped
+         serverLobby = []
      serverPlayers   <- mapM (\(i,u,s) -> newPlayer i u s) scores
-     serverNpcs      <- mapM (initServerNPC True)
-                             [playerCount .. npcCount env + playerCount - 1]
-     let serverMode  = Starting
+     serverNpcs      <- mapM (initServerNPC True) npcIds
      return ServerWorld { .. }
 
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
@@ -318,6 +309,10 @@ extractPlayer i (p:ps)
 
 data ServerEvent
   = ServerTick
+  | JoinEvent
+      Int
+      String
+      Handle
   | ClientDisconnect
       Int -- client id
   | ClientEvent
@@ -333,25 +328,49 @@ eventLoop ::
   IO ()
 eventLoop env hs w events lastTick
   | rnf w `seq` lastTick `seq` False = undefined
-  | nullHandles hs = return ()
+  | shutdownOnEmpty env && nullHandles hs = return ()
   | otherwise      = logic =<< readChan events
   where
+  logic (JoinEvent i user h) =
+    do let hs' = addHandle i h hs
+           w'  = w { serverLobby = (i,user):serverLobby w }
+           env' = env { shutdownOnEmpty = True }
+       announce hs' $ generateSetWorld w
+       announce hs' $ ServerMessage $ user ++ " joined"
+       eventLoop env' hs' w' events lastTick
+
   logic ServerTick =
     do now <- getCurrentTime
        let elapsed = realToFrac (diffUTCTime now lastTick)
        w' <- updateServerWorld hs elapsed w
        eventLoop env hs w' events now
 
-  logic (ClientEvent name msg) =
-    do w' <- updateWorldForCommand env name hs w msg
-       eventLoop env hs w' events lastTick
+  logic (ClientEvent name msg)
+      -- The ids of lobby players might overlap with NPCs
+    | isInLobby name w
+        && msg /= NewGame = eventLoop env hs w events lastTick
+    | otherwise =
+        do w' <- updateWorldForCommand env name hs w msg
+           eventLoop env hs w' events lastTick
 
   logic (ClientDisconnect name) =
     do let hs' = removeHandle name hs
        putStrLn $ "Client disconnect with id " ++ show name
-       let (p,ps) = fromMaybe (error "eventLoop")
-                  $ extractPlayer name $ serverPlayers w
-       announce hs' $ ServerCommand name Die
-       announce hs' $ ServerMessage $ playerUsername p ++ " disconnected"
-       let w' = w { serverPlayers = ps }
-       eventLoop env hs' w' events lastTick
+       case extractPlayer name $ serverPlayers w of
+         Just (p,ps) ->
+           do announce hs' $ ServerCommand name Die
+              announce hs' $ ServerMessage $ playerUsername p ++ " disconnected"
+              let w' = w { serverPlayers = ps }
+              eventLoop env hs' w' events lastTick
+         Nothing ->
+           case lookup name $ serverLobby w of
+             Just u ->
+              do announce hs' $ ServerMessage $ u ++ " left lobby"
+                 let w' = w { serverLobby = [(k,v) | (k,v) <- serverLobby w
+                                                   , k /= name] }
+                 eventLoop env hs' w' events lastTick
+             Nothing -> -- This really shouldn't happen
+              eventLoop env hs w events lastTick
+
+isInLobby :: Int -> ServerWorld -> Bool
+isInLobby i w = i `elem` map fst (serverLobby w)
