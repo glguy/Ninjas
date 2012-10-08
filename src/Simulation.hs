@@ -106,7 +106,7 @@ data ClientNPC = ClientNPC
 data World = World
   { worldNpcs        :: [ClientNPC]
   , dingTimers       :: [Float]
-  , smokeTimers      :: [(Float, Point)]
+  , smokeTimers      :: [(Point, Anim.Animation)]
   , worldMessages    :: [String]
   , appearance       :: Anim.World
   }

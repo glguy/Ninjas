@@ -27,6 +27,10 @@ once frameDelay moreFrames = Animation { .. }
   where waitFor   = 0
         curFrame  = blank
 
+
+finished :: Float -> Animation -> Bool
+finished e a = null (moreFrames a) && waitFor a <= e
+
 update :: Float -> Animation -> Animation
 update elapsed a
   | elapsed > waitFor a =
@@ -73,15 +77,28 @@ loadNPC =
      return NPC { .. }
 
 
-data World = World { background, tower :: Animation
+data World = World { background, tower, smoke :: Animation
                    , npc :: NPC }
 
 loadWorld :: IO World
 loadWorld =
   do npc <- loadNPC
      tower <- loadAnim "tower"
+     smoke <- loadSmoke
      let background = once defaultFrameDelay []
      return World { .. }
+
+loadSmoke :: IO Animation
+loadSmoke =
+  do a <- loadAnim "smoke"
+     let fs  = case moreFrames a of
+                 [] -> [blank]
+                 xs -> xs
+         allFs = fs ++ tail (reverse fs)
+     let n = fromIntegral (length allFs) :: Float
+     return a { moreFrames = allFs, frameDelay = smokeLen / n }
+  where
+  smokeLen = 5 -- secs
 
 
 updateWorld :: Float -> World -> World
