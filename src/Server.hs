@@ -147,12 +147,26 @@ updateWorldForCommand env i hs w msg =
                     do let killer = playerUsername me
                        announceOne hs killed
                          $ ServerMessage $ "Killed by " ++ killer
-                  return $ w { serverPlayers = me' : them'
+                  
+                  let winningAttack = all isDeadPlayer them'
+                  them'' <- if winningAttack
+                            then endGame hs [me] them' "force"
+                            else return them'
+
+                  let mode
+                        | winningAttack = Stopped
+                        | otherwise     = Playing
+
+                  return $ w { serverPlayers = me' : them''
                              , serverNpcs    = npcs'
+                             , serverMode    = mode
                              }
 
            _        -> return w
        _          -> return w
+
+isDeadPlayer :: Player -> Bool
+isDeadPlayer p = Dead == npcState (playerNpc p)
 
 serverScores :: ServerWorld -> [(Int,String,Int)]
 serverScores w = [ (npcName (playerNpc p), playerUsername p, playerScore p)
@@ -179,38 +193,39 @@ updateServerWorld hs t w
   | serverMode w /= Playing = return w
   | otherwise =
      do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
+        npcs' <- mapM (updateNPC hs t True) $ serverNpcs w
 
-        let survivors = filter (not . (Dead ==) . npcState . playerNpc) pcs'
-            (winners, reason) = case (survivors, pcs') of
-              -- This match on pcs' ensures single-player
-              -- games don't immediately terminate
-              ([_],(_:_:_)) -> (survivors, "by murder!")
-              _             -> (filter isWinner pcs',
-                                 "by capturing the diamonds!")
+        let winners = filter isWinner pcs'
 
-        pcs2 <-
-         if null winners
-           then return pcs'
-           else do let ps = map (addVictory winners) pcs'
-                   announce hs $ ServerMessage
-                     $ commas (map playerUsername winners)
-                       ++ " wins " ++ reason
-                   announce hs
-                     $ ServerMessage $ commas $ map prettyScore
-                     $ reverse $ sortBy (comparing playerScore) ps
-                   return ps
-
-        when (null pcs2) $ announce hs $ ServerMessage "Game Over"
+        pcs2 <- if null winners
+                then return pcs'
+                else endGame hs winners pcs' "deception"
 
         let mode'
-              | not (null winners) || null pcs2 = Stopped
-              | otherwise                       = Playing
+              | null winners       = Playing
+              | otherwise          = Stopped
 
-        npcs' <- mapM (updateNPC hs t True) $ serverNpcs w
         return w { serverPlayers = pcs2
                  , serverNpcs    = npcs'
                  , serverMode    = mode'
                  }
+
+endGame :: Handles -> [Player] -> [Player] -> String -> IO [Player]
+endGame hs winners players reason =
+
+  do -- Declare victory
+     announce hs $ ServerMessage
+       $ commas (map playerUsername winners) ++ " wins by " ++ reason ++ "!"
+
+     -- Update scores
+     let players' = map (addVictory winners) players
+
+     -- Announce scores
+     announce hs
+       $ ServerMessage $ commas $ map prettyScore
+       $ reverse $ sortBy (comparing playerScore) players'
+
+     return players'
 
 prettyScore :: Player -> String
 prettyScore p = playerUsername p ++ ": " ++ show (playerScore p)
@@ -371,8 +386,18 @@ eventLoop env hs w events lastTick
          Just (p,ps) ->
            do announce hs' $ ServerCommand name Die
               announce hs' $ ServerMessage $ playerUsername p ++ " disconnected"
-              let w' = w { serverPlayers = ps }
+              
+              when (null ps) $ announce hs $ ServerMessage "Game Over"
+
+              let mode | null ps        = Stopped
+                       | otherwise      = Playing
+
+              let w' = w { serverPlayers = ps
+                         , serverMode    = mode
+                         }
+
               eventLoop env hs' w' events lastTick
+
          Nothing ->
            case lookup name $ serverLobby w of
              Just u ->
