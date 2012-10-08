@@ -4,7 +4,7 @@ module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 import Control.DeepSeq (rnf)
 import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
-import Control.Exception
+import Control.Exception (IOException, handle, bracket_)
 import Control.Monad
 import Data.List (intercalate, sortBy, (\\))
 import Data.Foldable (for_)
@@ -13,7 +13,6 @@ import Data.Ord (comparing)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
-import Prelude hiding (catch)
 import Network
 import Network.Socket (getSocketName)
 import System.IO
@@ -57,15 +56,15 @@ startNetwork env events =
             do ClientJoin name <- hGetClientCommand h
                putStrLn $ concat ["Got connection from ",
                                   name, "@", host, ":", show port]
-               writeChan events $ JoinEvent i name h
-               clientSocketLoop i h events
+               bracket_ (writeChan events $ JoinEvent i name h)
+                        (writeChan events $ DisconnectEvent i)
+                        (clientSocketLoop i h events)
 
 clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
 clientSocketLoop i h events =
-  forever (do c <- hGetClientCommand h
-              writeChan events (ClientEvent i c))
-  `catch` \(SomeException _) ->
-  writeChan events (ClientDisconnect i)
+  handle ignoreIOException $
+  forever $ do c <- hGetClientCommand h
+               writeChan events $ ClientEvent i c
 
 readyCountdown :: Handles -> ServerWorld -> IO ServerWorld
 readyCountdown hs w =
@@ -161,7 +160,7 @@ serverScores w = [ (npcName (playerNpc p), playerUsername p, playerScore p)
 
 tickThread :: Chan ServerEvent -> IO ()
 tickThread events =
-  forever $ do writeChan events ServerTick
+  forever $ do writeChan events TickEvent
                threadDelay $ 1000000 `div` eventsPerSecond
 
 initServerWorld :: ServerEnv -> [(Int,String,Int)] -> IO ServerWorld
@@ -316,12 +315,12 @@ extractPlayer i (p:ps)
                    return (x,p:xs)
 
 data ServerEvent
-  = ServerTick
+  = TickEvent
   | JoinEvent
       Int
       String
       Handle
-  | ClientDisconnect
+  | DisconnectEvent
       Int -- client id
   | ClientEvent
       Int -- client id
@@ -332,7 +331,7 @@ eventLoop ::
   Handles ->
   ServerWorld ->
   Chan ServerEvent ->
-  UTCTime {- ^ time previous ServerTick was processed -} ->
+  UTCTime {- ^ time previous tick was processed -} ->
   IO ()
 eventLoop env hs w events lastTick
   | rnf w `seq` lastTick `seq` False = undefined
@@ -351,7 +350,7 @@ eventLoop env hs w events lastTick
        announce hs' $ ServerMessage $ user ++ " joined lobby"
        eventLoop env' hs' w' events lastTick
 
-  logic ServerTick =
+  logic TickEvent =
     do now <- getCurrentTime
        let elapsed = realToFrac (diffUTCTime now lastTick)
        w' <- updateServerWorld hs elapsed w
@@ -365,7 +364,7 @@ eventLoop env hs w events lastTick
         do w' <- updateWorldForCommand env name hs w msg
            eventLoop env hs w' events lastTick
 
-  logic (ClientDisconnect name) =
+  logic (DisconnectEvent name) =
     do let hs' = removeHandle name hs
        putStrLn $ "Client disconnect with id " ++ show name
        case extractPlayer name $ serverPlayers w of

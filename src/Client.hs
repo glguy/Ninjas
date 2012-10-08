@@ -52,7 +52,7 @@ clientMain :: ClientEnv -> IO ()
 clientMain (ClientEnv host port name) =
   do anim <- Anim.loadWorld
      h <- connectTo host (PortNumber (fromIntegral port))
-     hSetBuffering h LineBuffering
+     hSetBuffering h NoBuffering
 
      hPutClientCommand h (ClientJoin name)
 
