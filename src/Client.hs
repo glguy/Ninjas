@@ -29,12 +29,6 @@ windowPadding = 60
 dingPeriod :: Float
 dingPeriod = 1
 
-smokePeriod :: Float
-smokePeriod = 5
-
-smokeRadius :: Float
-smokeRadius = 125
-
 textScale :: Float
 textScale = 0.25
 
@@ -112,36 +106,12 @@ drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : map (drawPillar w) pillars
-               ++ map (drawNPC (smokeTimers w)) (worldNpcs w)
+               ++ map drawNPC (worldNpcs w)
                ++ map drawSmoke (smokeTimers w)
                ++ messagePictures (worldMessages w)
 
-drawSmoke :: (Float, Point) -> Picture
-drawSmoke (t, pt)
-  = translateV pt
-  $ rotate (radToDeg t)
-  $ scale scalar scalar smokePicture
-  where
-  scalar = smokeRadiusScalar t
-
-smokePicture :: Picture
-smokePicture =
-  pictures
-      [ color (greyN 0.1 ) $ circleSolid 1
-      , color (greyN 0.25)
-         $ pictures [ circle 1
-                    , translate s2    s2    $ arc 135 225 s
-                    , translate s2    (-s2) $ arc  45 135 s
-                    , translate (-s2) s2    $ arc 225 315 s
-                    , translate (-s2) (-s2) $ arc 315  45 s
-                    ]
-      ]
-  where
-  s      = 1 / sqrt 2
-  s2     = s / sqrt 2
-
-smokeRadiusScalar :: Float -> Float
-smokeRadiusScalar t = smokeRadius * sin (t / (smokePeriod / pi))
+drawSmoke :: (Point, Anim.Animation) -> Picture
+drawSmoke (pt,a) = translateV pt (Anim.curFrame a)
 
 messagePictures :: [String] -> [Picture]
 messagePictures msgs = zipWith messagePicture [0..] msgs
@@ -156,7 +126,6 @@ messagePicture i msg
   where
   textHeight = 40
   gray = (4 - fromIntegral (min 3 i)) / 4
-  
 
 dingPicture :: Int -> Picture
 dingPicture n =
@@ -177,47 +146,19 @@ borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width)
                                             (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
-drawNPC :: [(Float, Point)] -> ClientNPC -> Picture
-drawNPC smokes cnpc
-  | covered = blank
-  | otherwise
+drawNPC :: ClientNPC -> Picture
+drawNPC cnpc
     = translateV (npcPos npc)
     $ rotate (negate $ radToDeg rads)
-    $ pictures [ attackArc
-               , Anim.curFrame (clientAnim cnpc)
-               ]
+    $ Anim.curFrame (clientAnim cnpc)
   where npc   = clientNPC cnpc
-        state = npcState npc
+        rads  = argV (npcFacing npc)
 
-        distance a b = magV (subPt a b)
-        smokeCovering (t,pt) =
-          distance pt (npcPos npc) + ninjaRadius <= smokeRadiusScalar t
-        covered = any smokeCovering smokes
 
-        rads = argV $ npcFacing npc
-
-        wedge =
-          line [ rotateV attackAngle (1, 0)
-               , (0,0)
-               , rotateV (negate attackAngle) (1, 0)
-               ]
-
-        attackArc
-          | state == Dead = blank
-          | otherwise
-              = color (greyN 0.2)
-              $ pictures
-                  [ scale attackDistance attackDistance wedge
-                  , arcRad (negate attackAngle) attackAngle attackDistance
-                  ]
 
 -- | Translate a picture using a 'Vector'
 translateV :: Vector -> Picture -> Picture
 translateV (x,y) = translate x y
-
--- | Same as 'arc' but with angles measured in radians.
-arcRad :: Float -> Float -> Float -> Picture
-arcRad a b = arc (radToDeg a) (radToDeg b)
 
 inputEvent     :: Handle -> MVar World -> Event -> () -> IO ()
 inputEvent h var (EventKey k Down _ pos) ()
@@ -236,7 +177,8 @@ updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
   w { worldNpcs   = map (updateClientNPC npcLooks d) (worldNpcs w)
     , dingTimers  = [ t - d      |  t     <- dingTimers  w, t > d]
-    , smokeTimers = [(t - d, pt) | (t,pt) <- smokeTimers w, t > d]
+    , smokeTimers = [(pt, Anim.update d a) |
+                            (pt,a) <- smokeTimers w, not (Anim.finished d a) ]
     , appearance  = Anim.updateWorld d (appearance w)
     }
   where npcLooks = Anim.npc (appearance w)
@@ -271,7 +213,8 @@ clientUpdates h var = forever $
       ServerReady       -> w { worldMessages = [] }
       ServerMessage txt -> w { worldMessages = txt : worldMessages w }
       ServerDing        -> w { dingTimers = dingPeriod : dingTimers w }
-      ServerSmoke pt    -> w { smokeTimers = (smokePeriod, pt) : smokeTimers w }
+      ServerSmoke pt    -> let smoke = Anim.smoke (appearance w)
+                           in w { smokeTimers = (pt,smoke) : smokeTimers w }
       SetWorld poss     -> initClientWorld (appearance w) poss
       ServerCommand i m -> let f = npcCommand w m
                            in w { worldNpcs = updateNpcList i f $ worldNpcs w }
