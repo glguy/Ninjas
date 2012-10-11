@@ -1,7 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 module Character where
 
-import Control.DeepSeq
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Data.Vector
 
@@ -122,24 +121,3 @@ isStunned c =
   case charState c of
     Waiting Wait { waitStunned = True } -> True
     _                                   -> False
-
-instance NFData Character where
-  rnf c               	= rnf (charName   c) `seq`
-                          rnf (charPos    c) `seq`
-                          rnf (charFacing c) `seq`
-                          rnf (charState  c)
-
-instance NFData State where
-  rnf (Walking w)       = rnf w
-  rnf (Waiting w)       = rnf w
-  rnf Dead              = ()
-  rnf (Attacking x)     = rnf x
-
-instance NFData WalkInfo where
-  rnf w                 = rnf (walkTarget   w) `seq`
-                          rnf (walkDist     w) `seq`
-                          rnf (walkVelocity w)
-
-instance NFData WaitInfo where
-  rnf w                 = rnf (waitWaiting w) `seq`
-                          rnf (waitStunned w)

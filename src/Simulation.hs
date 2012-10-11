@@ -2,7 +2,6 @@
 
 module Simulation where
 
-import Control.DeepSeq
 import Data.Maybe (catMaybes)
 import Data.List  (findIndex)
 import Graphics.Gloss.Data.Point
@@ -154,19 +153,3 @@ hasSmokebombs p = playerSmokes p > 0
 -- | Update a player to have one fewer smokebombs.
 consumeSmokebomb :: Player -> Player
 consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }
-
-instance NFData Player where
-  rnf p                 = rnf (playerCharacter p) `seq`
-                          rnf (playerUsername p) `seq`
-                          rnf (playerScore    p) `seq`
-                          rnf (playerVisited  p) `seq`
-                          rnf (playerSmokes   p)
-
-instance NFData ServerWorld where
-  rnf w                 = rnf (serverNpcs    w) `seq`
-                          rnf (serverPlayers w) `seq`
-                          rnf (serverMode    w) `seq`
-                          rnf (serverLobby   w)
-
-instance NFData ServerMode where
-  rnf w                 = w `seq` ()

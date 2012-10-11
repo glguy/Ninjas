@@ -33,6 +33,5 @@ executable Ninjas
                        network,
                        random,
                        time,
-                       filepath,
-                       deepseq
+                       filepath
   ghc-options:         -Wall

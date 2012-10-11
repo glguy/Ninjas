@@ -1,7 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
-import Control.DeepSeq (rnf)
 import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
 import Control.Exception (SomeException, handle, bracket_)
@@ -67,10 +66,8 @@ acceptClient events sock i =
   do (h,host,port) <- accept sock
      hSetBuffering h NoBuffering
      forkIO $
-       do ClientJoin name <- hGetClientCommand h
-          putStrLn $ concat ["Got connection from ",
-                                  name, "@", host, ":", show port]
-          bracket_ (writeChan events $ JoinEvent i name h)
+       do putStrLn $ concat ["Got connection from ", host, ":", show port]
+          bracket_ (writeChan events $ JoinEvent i h)
                    (writeChan events $ DisconnectEvent i)
                    (clientSocketLoop i h events)
 
@@ -149,7 +146,7 @@ updateWorldForCommand env i hs w msg =
                  || not (isInLobby i w)
                     && length (serverPlayers w) == 1 ->
                         do w' <- newGame env w
-                           announce hs $ generateSetWorld w
+                           announce hs $ generateSetWorld w'
                            readyCountdown hs w'
                | otherwise -> return w
 
@@ -345,7 +342,6 @@ data ServerEvent
   = TickEvent
   | JoinEvent
       Int
-      String
       Handle
   | DisconnectEvent
       Int -- client id
@@ -361,21 +357,14 @@ eventLoop ::
   UTCTime {- ^ time previous tick was processed -} ->
   IO ()
 eventLoop env hs w events lastTick
-  | rnf w `seq` lastTick `seq` False = undefined
   | shutdownOnEmpty env && nullHandles hs = return ()
   | otherwise      = logic =<< readChan events
   where
-  logic (JoinEvent i user h) =
+  logic (JoinEvent i h) =
     do let hs' = addHandle i h hs
-           w'  = w { serverLobby = (i,user):serverLobby w }
            env' = env { shutdownOnEmpty = True }
        announceOne hs' i $ generateSetWorld w
-       forM_ (serverLobby w) $ \(_,u) ->
-         announceOne hs' i $ ServerMessage $ u ++ " in lobby"
-       forM_ (serverPlayers w) $ \p ->
-         announceOne hs' i $ ServerMessage $ playerUsername p ++ " in game"
-       announce hs' $ ServerMessage $ user ++ " joined lobby"
-       eventLoop env' hs' w' events lastTick
+       eventLoop env' hs' w events lastTick
 
   logic TickEvent =
     do now <- getCurrentTime
@@ -383,6 +372,9 @@ eventLoop env hs w events lastTick
        w' <- updateServerWorld hs elapsed w
        eventLoop env hs w' events now
 
+  logic (ClientEvent i (ClientJoin name))
+    = do w' <- addClient hs i name w
+         eventLoop env hs w' events lastTick
   logic (ClientEvent name msg)
       -- The ids of lobby players might overlap with NPCs
     | isInLobby name w
@@ -419,6 +411,16 @@ eventLoop env hs w events lastTick
                  eventLoop env hs' w' events lastTick
              Nothing -> -- This really shouldn't happen
               eventLoop env hs w events lastTick
+
+addClient :: Handles -> Int -> String -> ServerWorld -> IO ServerWorld
+addClient hs i name w =
+  do forM_ (serverLobby w) $ \(_,u) ->
+         announceOne hs i $ ServerMessage $ u ++ " in lobby"
+     forM_ (serverPlayers w) $ \p ->
+         announceOne hs i $ ServerMessage $ playerUsername p ++ " in game"
+     announce hs $ ServerMessage $ name ++ " joined lobby"
+     return $ w { serverLobby = (i,name) : serverLobby w }
+ -- XXX : Check that the client isn't already registered
 
 -----------------------------------------------------------------------
 -- Player predicates
