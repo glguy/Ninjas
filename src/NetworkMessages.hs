@@ -1,12 +1,12 @@
 module NetworkMessages where
 
 import Control.Monad
-import Data.Binary
-import Data.Int
+import Data.Binary (Binary(get,put),getWord8,putWord8, Get,Put)
 import Graphics.Gloss.Data.Picture
 import Network (PortID(PortNumber))
-import System.IO
-import qualified Data.ByteString.Lazy as B
+import System.IO (Handle)
+
+import NetworkedGame.Packet
 
 gamePort :: PortID
 gamePort = PortNumber 16000
@@ -37,34 +37,19 @@ data ServerCommand
   deriving (Show, Read)
 
 hGetClientCommand :: Handle -> IO ClientCommand
-hGetClientCommand = hGetCmd
+hGetClientCommand = hGetPacketed
 
 hPutClientCommand :: Handle -> ClientCommand -> IO ()
-hPutClientCommand h x =
-  do let bs = encode x
-         n  = encode (B.length bs)
-     B.hPutStr h n
-     B.hPutStr h bs
+hPutClientCommand h x = hPutPacket h $ mkPacket x
 
 hGetServerCommand :: Handle -> IO ServerCommand
-hGetServerCommand = hGetCmd
+hGetServerCommand = hGetPacketed
 
-newtype ServerPacket = ServerPacket B.ByteString
+hPutServerPacket :: Handle -> Packet -> IO ()
+hPutServerPacket = hPutPacket
 
-hPutServerPacket :: Handle -> ServerPacket -> IO ()
-hPutServerPacket h (ServerPacket bs) = B.hPutStr h bs
-
-mkServerPacket :: ServerCommand -> ServerPacket
-mkServerPacket x = ServerPacket (B.append n bs)
-  where
-  bs = encode x
-  n  = encode (B.length bs)
-
-hGetCmd :: Binary a => Handle -> IO a
-hGetCmd h =
-  do n <- decode `fmap` B.hGet h 8
-     bs <- B.hGet h (fromIntegral (n :: Int64))
-     return $ decode bs
+mkServerPacket :: ServerCommand -> Packet
+mkServerPacket = mkPacket
 
 instance Binary Command where
   put = putCommand

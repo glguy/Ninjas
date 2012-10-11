@@ -32,6 +32,6 @@ executable Ninjas
                        gloss,
                        network,
                        random,
-                       time,
-                       filepath
+                       filepath,
+                       networked-game
   ghc-options:         -Wall

@@ -1,31 +1,28 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
-import Control.Concurrent (forkIO, threadDelay, ThreadId,
-                           Chan, newChan, readChan, writeChan)
-import Control.Exception (SomeException, handle, bracket_)
-import Control.Monad (forM_, when, guard, forever)
+import Control.Concurrent (threadDelay)
+import Control.Monad (forM_, when, guard)
 import Data.List (intercalate, sortBy, (\\))
-import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
-import Network
-import Network.Socket (getSocketName)
-import System.IO
+import Network (PortID(..))
 
 import Simulation
 import Character
 import NetworkMessages
 import Parameters
 
+import NetworkedGame.Server (NetworkServer(..), announce, announceOne, Handles)
+import NetworkedGame.Handles (ConnectionId(..))
+import qualified NetworkedGame.Server as NS
+
 data ServerEnv = ServerEnv
   { npcCount          :: Int
   , initialSmokebombs :: Int
   , serverPort        :: Int
-  , shutdownOnEmpty   :: Bool
   }
 
 defaultServerEnv :: ServerEnv
@@ -33,74 +30,22 @@ defaultServerEnv = ServerEnv
   { npcCount          = 10
   , initialSmokebombs = 1
   , serverPort        = 16000
-  , shutdownOnEmpty   = False
   }
 
 -- | Main entry point for server
 serverMain :: ServerEnv -> IO ()
 serverMain env =
-  do events             <- newChan
-     _acceptThreadId    <- startNetwork env events
-     lastTick           <- getCurrentTime
-     _tickThreadId      <- forkIO $ tickThread events
-     w                  <- initServerWorld env []
-     eventLoop env emptyHandles w events lastTick
-
------------------------------------------------------------------------
--- Client/server IO
------------------------------------------------------------------------
-
--- | Create a thread which will accept new connections.
--- Connections and disconnections will be announced to the event channel.
-startNetwork :: ServerEnv -> Chan ServerEvent -> IO ThreadId
-startNetwork env events =
-  do sock       <- listenOn (PortNumber (fromIntegral (serverPort env)))
-     sockName   <- getSocketName sock
-     putStrLn $ "Server listening for ninjas on " ++ show sockName
-     forkIO $ mapM_ (acceptClient events sock) [0..]
-
--- | Accept a connection and create a thread to manage incoming data
--- from that connection.
-acceptClient :: Chan ServerEvent -> Socket -> Int -> IO ThreadId
-acceptClient events sock i =
-  do (h,host,port) <- accept sock
-     hSetBuffering h NoBuffering
-     forkIO $
-       do putStrLn $ concat ["Got connection from ", host, ":", show port]
-          bracket_ (writeChan events $ JoinEvent i h)
-                   (writeChan events $ DisconnectEvent i)
-                   (clientSocketLoop i h events)
-
--- | Read incoming packets, decode them, and pass them along to
--- the event channel.
-clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
-clientSocketLoop i h events =
-  handle ignoreExceptions $
-  forever $ do c <- hGetClientCommand h
-               writeChan events $ ClientEvent i c
-
--- | Send a command to a collection of clients
-announce :: Handles -> ServerCommand -> IO ()
-announce hs msg =
-  let packet = mkServerPacket msg in
-  forM_ (listHandles hs) $ \(_name,h) ->
-     handle ignoreExceptions $
-     hPutServerPacket h packet
-
--- | Send a command to a single client identified by id.
-announceOne ::
-  Handles ->
-  Int {- ^ client id -} ->
-  ServerCommand ->
-  IO ()
-announceOne hs i msg =
-  let packet = mkServerPacket msg in
-  for_ (lookupHandle i hs) $ \h ->
-  handle ignoreExceptions $
-  hPutServerPacket h packet
-
-ignoreExceptions :: SomeException -> IO ()
-ignoreExceptions _ = return ()
+  do w                  <- initServerWorld env []
+     let ServerEnv { serverPort = port } = env
+     let settings = NetworkServer
+           { serverPort = PortNumber $ fromIntegral port
+           , eventsPerSecond = Parameters.eventsPerSecond
+           , onTick     = updateServerWorld
+           , onConnect  = connect
+           , onDisconnect = disconnect
+           , onCommand = command env
+           }
+     NS.serverMain settings w
 
 -----------------------------------------------------------------------
 -- Game logic
@@ -178,7 +123,7 @@ updateWorldForCommand env i hs w msg =
                   forM_ cmds  $ announce hs
                   forM_ kills $ \killed ->
                     do let killer = playerUsername me
-                       announceOne hs killed
+                       announceOne hs (ConnectionId killed)
                          $ ServerMessage $ "Killed by " ++ killer
                   
                   let winningAttack = all isDeadPlayer them'
@@ -201,11 +146,6 @@ updateWorldForCommand env i hs w msg =
 serverScores :: ServerWorld -> [(Int,String,Int)]
 serverScores w = [ (charName (playerCharacter p), playerUsername p, playerScore p)
                  | p <- serverPlayers w ]
-
-tickThread :: Chan ServerEvent -> IO ()
-tickThread events =
-  forever $ do writeChan events TickEvent
-               threadDelay $ 1000000 `div` eventsPerSecond
 
 initServerWorld :: ServerEnv -> [(Int,String,Int)] -> IO ServerWorld
 initServerWorld env scores =
@@ -309,28 +249,6 @@ constrainPoint from
   where
   aux f x p = fromMaybe p (f from p x)
 
-newtype Handles = Handles { listHandles :: [(Int,Handle)] }
-
-emptyHandles :: Handles
-emptyHandles = Handles []
-
-addHandle :: Int -> Handle -> Handles -> Handles
-addHandle i h (Handles hs) = Handles ((i,h):hs)
-
-removeHandle :: Int -> Handles -> Handles
-removeHandle i (Handles hs) = Handles (aux hs)
-  where
-  aux [] = []
-  aux (x:xs)
-    | i == fst x = xs
-    | otherwise  = x : aux xs
-
-lookupHandle :: Int -> Handles -> Maybe Handle
-lookupHandle i (Handles xs) = lookup i xs
-
-nullHandles :: Handles -> Bool
-nullHandles (Handles xs) = null xs
-
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
 extractPlayer _ [] = Nothing
 extractPlayer i (p:ps)
@@ -338,86 +256,52 @@ extractPlayer i (p:ps)
   | otherwise = do (x,xs) <- extractPlayer i ps
                    return (x,p:xs)
 
-data ServerEvent
-  = TickEvent
-  | JoinEvent
-      Int
-      Handle
-  | DisconnectEvent
-      Int -- client id
-  | ClientEvent
-      Int -- client id
-      ClientCommand -- received command
+connect :: Handles -> ConnectionId -> ServerWorld -> IO ServerWorld
+connect hs i w =
+  do announceOne hs i $ generateSetWorld w
+     return w
 
-eventLoop ::
-  ServerEnv ->
-  Handles ->
-  ServerWorld ->
-  Chan ServerEvent ->
-  UTCTime {- ^ time previous tick was processed -} ->
-  IO ()
-eventLoop env hs w events lastTick
-  | shutdownOnEmpty env && nullHandles hs = return ()
-  | otherwise      = logic =<< readChan events
-  where
-  logic (JoinEvent i h) =
-    do let hs' = addHandle i h hs
-           env' = env { shutdownOnEmpty = True }
-       announceOne hs' i $ generateSetWorld w
-       eventLoop env' hs' w events lastTick
+command :: ServerEnv -> Handles -> ConnectionId -> ClientCommand -> ServerWorld ->
+  IO ServerWorld
+command _ hs (ConnectionId i) (ClientJoin name) w = addClient hs i name w
 
-  logic TickEvent =
-    do now <- getCurrentTime
-       let elapsed = realToFrac (diffUTCTime now lastTick)
-       w' <- updateServerWorld hs elapsed w
-       eventLoop env hs w' events now
-
-  logic (ClientEvent i (ClientJoin name))
-    = do w' <- addClient hs i name w
-         eventLoop env hs w' events lastTick
-  logic (ClientEvent name msg)
+command env hs (ConnectionId i) msg w
       -- The ids of lobby players might overlap with NPCs
-    | isInLobby name w
-        && msg /= NewGame = eventLoop env hs w events lastTick
-    | otherwise =
-        do w' <- updateWorldForCommand env name hs w msg
-           eventLoop env hs w' events lastTick
+    | isInLobby i w
+        && msg /= NewGame = return w
+    | otherwise = updateWorldForCommand env i hs w msg
 
-  logic (DisconnectEvent name) =
-    do let hs' = removeHandle name hs
-       putStrLn $ "Client disconnect with id " ++ show name
-       case extractPlayer name $ serverPlayers w of
-         Just (p,ps) ->
-           do announce hs' $ ServerCommand name Die
-              announce hs' $ ServerMessage $ playerUsername p ++ " disconnected"
-              
-              when (null ps) $ announce hs $ ServerMessage "Game Over"
+disconnect :: Handles -> ConnectionId -> ServerWorld -> IO ServerWorld
+disconnect hs (ConnectionId i) w =
+  do putStrLn $ "Client disconnect with id " ++ show i
+     case extractPlayer i $ serverPlayers w of
+       Just (p,ps) ->
+         do announce hs $ ServerCommand i Die
+            announce hs $ ServerMessage $ playerUsername p ++ " disconnected"
+            
+            when (null ps) $ announce hs $ ServerMessage "Game Over"
 
-              let mode | null ps        = Stopped
-                       | otherwise      = Playing
+            let mode | null ps        = Stopped
+                     | otherwise      = Playing
 
-              let w' = w { serverPlayers = ps
-                         , serverMode    = mode
-                         }
+            return w { serverPlayers = ps
+                     , serverMode    = mode
+                     }
 
-              eventLoop env hs' w' events lastTick
-
-         Nothing ->
-           case lookup name $ serverLobby w of
-             Just u ->
-              do announce hs' $ ServerMessage $ u ++ " left lobby"
-                 let w' = w { serverLobby = [(k,v) | (k,v) <- serverLobby w
-                                                   , k /= name] }
-                 eventLoop env hs' w' events lastTick
-             Nothing -> -- This really shouldn't happen
-              eventLoop env hs w events lastTick
+       Nothing ->
+         case lookup i $ serverLobby w of
+           Just u ->
+            do announce hs $ ServerMessage $ u ++ " left lobby"
+               return w { serverLobby = [(k,v) | (k,v) <- serverLobby w
+                                                 , k /= i] }
+           Nothing -> return w
 
 addClient :: Handles -> Int -> String -> ServerWorld -> IO ServerWorld
 addClient hs i name w =
   do forM_ (serverLobby w) $ \(_,u) ->
-         announceOne hs i $ ServerMessage $ u ++ " in lobby"
+         announceOne hs (ConnectionId i) $ ServerMessage $ u ++ " in lobby"
      forM_ (serverPlayers w) $ \p ->
-         announceOne hs i $ ServerMessage $ playerUsername p ++ " in game"
+         announceOne hs (ConnectionId i) $ ServerMessage $ playerUsername p ++ " in game"
      announce hs $ ServerMessage $ name ++ " joined lobby"
      return $ w { serverLobby = (i,name) : serverLobby w }
  -- XXX : Check that the client isn't already registered
