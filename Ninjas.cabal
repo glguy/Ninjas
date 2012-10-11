@@ -17,7 +17,14 @@ data-files: images/*.bmp
 
 executable Ninjas
   main-is:             Main.hs
-  other-modules:       Server, Simulation, Client, NetworkMessages, Anim
+  other-modules:
+                       Anim,
+                       Client,
+                       Character,
+                       NetworkMessages,
+                       Parameters,
+                       Server,
+                       Simulation
   hs-source-dirs:      src
   build-depends:       base,
                        binary,
