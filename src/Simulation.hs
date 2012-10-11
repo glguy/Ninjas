@@ -10,48 +10,10 @@ import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
 import System.Random (randomRIO)
 
-import qualified Anim
-import NetworkMessages
-import VectorUtils
 import Character
-
--- | Smallest point on the board
-boardMin :: Point
-boardMin = (-350,-250)
-
--- | Largest point on the board
-boardMax :: Point
-boardMax = (350,250)
-
--- | Maximum time an NPC will wait before choosing a new destination
-restTime :: Float
-restTime = 2
-
--- | Radius of ninja sprite in pixels. This is used for drawing
--- a ninja and determining when he is hidden under smoke.
-ninjaRadius :: Float
-ninjaRadius = 10
-
--- | Maximum distance from the center of a player where an attack has an effect
-attackDistance :: Float
-attackDistance = 50
-
--- | Maximum angle in radians in either direction from a player's direction of
--- travel where the attacks have an effect
-attackAngle    :: Float
-attackAngle    = pi / 3
-
--- | The number of time update events gloss should attempt to run per second
-eventsPerSecond :: Int
-eventsPerSecond = 100
-
--- | The locations of the centers of the win locations in the game
-pillars :: [Point]
-pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
-
--- | The length of a side of the win location squares
-pillarSize :: Float
-pillarSize = 40
+import NetworkMessages
+import Parameters
+import VectorUtils
 
 data Player   = Player
   { playerCharacter :: Character
@@ -61,19 +23,6 @@ data Player   = Player
   , playerSmokes   :: Int
   }
   deriving (Show, Read, Eq)
-
-data ClientCharacter = ClientCharacter
-  { clientCharacter  :: Character
-  , clientAnim       :: Anim.Animation
-  }
-
-data World = World
-  { worldCharacters  :: [ClientCharacter]
-  , dingTimers       :: [Float]
-  , smokeTimers      :: [(Point, Anim.Animation)]
-  , worldMessages    :: [String]
-  , appearance       :: Anim.World
-  }
 
 data ServerWorld = ServerWorld
   { serverNpcs    :: [Character]
@@ -155,17 +104,6 @@ randomUnitVector =
   do degrees <- randomRIO (0,359)
      let rads = degToRad $ fromInteger degrees
      return $ unitVectorAtAngle rads
-
--- | Construct a new character given a name, a position,
--- and a facing unit vector. This function is used
--- by clients who are told the parameters by the
--- server.
-initClientCharacter :: Anim.NPC -> Int -> Point -> Vector -> ClientCharacter
-initClientCharacter anim charName charPos charFacing =
-  let charState = Waiting Wait { waitWaiting = Nothing, waitStunned = False }
-      clientAnim = Anim.stay anim
-      clientCharacter = Character { .. }
-  in  ClientCharacter { .. }
 
 -- | Construct a new character given a name, a position,
 -- and a facing unit vector. When think is True,

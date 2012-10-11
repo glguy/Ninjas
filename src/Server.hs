@@ -20,6 +20,7 @@ import System.IO
 import Simulation
 import Character
 import NetworkMessages
+import Parameters
 
 data ServerEnv = ServerEnv
   { npcCount          :: Int
@@ -438,4 +439,3 @@ isDeadPlayer p = Dead == charState (playerCharacter p)
 
 isWinner :: Player -> Bool
 isWinner p = length (playerVisited p) == length pillars
-

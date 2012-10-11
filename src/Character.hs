@@ -2,23 +2,11 @@
 module Character where
 
 import Control.DeepSeq
-import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Data.Point
+import Graphics.Gloss.Data.Vector
 
 import VectorUtils
-
--- | Pixels per second traveled by ninjas
-speed :: Float
-speed = 100
-
--- | Duration in seconds a player is stunned after an attack
-attackDelay :: Float
-attackDelay = 1
-
--- | Duration in second for which an character will be stunned after an attack
-stunTime :: Float
-stunTime = 3
-
+import Parameters
 
 data Character = Character
   { charName   :: Int
@@ -57,7 +45,7 @@ data ThinkTask = ChooseWait | ChooseDestination
 -- server to send an update.
 stepCharacter ::
   Float {- ^ elapsed seconds -} ->
-  Character   ->
+  Character ->
   (Character, Bool, Maybe ThinkTask) -- (new character, did we change states, AI task)
 stepCharacter elapsed c =
   case state of
@@ -113,9 +101,8 @@ walkingCharacter walkTarget c = c { charState = state
 -- is specified the character will be updated automatically by the server.
 -- characters without a duration are typically players.
 waitingCharacter :: Maybe Float -> Bool -> Character -> Character
-waitingCharacter waitWaiting waitStunned c = c { charState = state }
-  where
-  state = Waiting Wait { .. }
+waitingCharacter waitWaiting waitStunned c =
+  c { charState = Waiting Wait { .. } }
 
 -- | Update an character to be dead
 deadCharacter :: Character -> Character

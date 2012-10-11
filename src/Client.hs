@@ -11,8 +11,8 @@ import Network
 import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 
-import Simulation
 import Character
+import Parameters
 import VectorUtils
 import qualified Anim
 
@@ -237,3 +237,28 @@ updateNpcList _ _ [] = []
 updateNpcList i f (n:ns)
   | charName (clientCharacter n) == i = f n : ns
   | otherwise      = n : updateNpcList i f ns
+
+data World = World
+  { worldCharacters  :: [ClientCharacter]
+  , dingTimers       :: [Float]
+  , smokeTimers      :: [(Point, Anim.Animation)]
+  , worldMessages    :: [String]
+  , appearance       :: Anim.World
+  }
+
+-- | Construct a new character given a name, a position,
+-- and a facing unit vector. This function is used
+-- by clients who are told the parameters by the
+-- server.
+initClientCharacter :: Anim.NPC -> Int -> Point -> Vector -> ClientCharacter
+initClientCharacter anim charName charPos charFacing =
+  let charState = Waiting Wait { waitWaiting = Nothing, waitStunned = False }
+      clientAnim = Anim.stay anim
+      clientCharacter = Character { .. }
+  in  ClientCharacter { .. }
+
+data ClientCharacter = ClientCharacter
+  { clientCharacter  :: Character
+  , clientAnim       :: Anim.Animation
+  }
+

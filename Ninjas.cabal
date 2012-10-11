@@ -19,12 +19,12 @@ executable Ninjas
   main-is:             Main.hs
   other-modules:       Server, Simulation, Client, NetworkMessages, Anim
   hs-source-dirs:      src
-  build-depends:       base         ==4.5.*,
-                       binary       ==0.5.*,
-                       bytestring   ==0.9.*,
-                       gloss        ==1.7.*,
-                       network      ==2.3.*,
-                       random       ==1.0.*,
+  build-depends:       base,
+                       binary,
+                       bytestring,
+                       gloss,
+                       network,
+                       random,
                        time,
                        filepath,
                        deepseq
