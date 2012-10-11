@@ -4,7 +4,7 @@ module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 import Control.DeepSeq (rnf)
 import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
-import Control.Exception (IOException, handle, bracket_)
+import Control.Exception (SomeException, handle, bracket_)
 import Control.Monad (forM_, when, guard, forever)
 import Data.List (intercalate, sortBy, (\\))
 import Data.Foldable (for_)
@@ -18,6 +18,7 @@ import Network.Socket (getSocketName)
 import System.IO
 
 import Simulation
+import Character
 import NetworkMessages
 
 data ServerEnv = ServerEnv
@@ -45,6 +46,10 @@ serverMain env =
      w                  <- initServerWorld env []
      eventLoop env emptyHandles w events lastTick
 
+-----------------------------------------------------------------------
+-- Client/server IO
+-----------------------------------------------------------------------
+
 -- | Create a thread which will accept new connections.
 -- Connections and disconnections will be announced to the event channel.
 startNetwork :: ServerEnv -> Chan ServerEvent -> IO ThreadId
@@ -68,11 +73,40 @@ acceptClient events sock i =
                    (writeChan events $ DisconnectEvent i)
                    (clientSocketLoop i h events)
 
+-- | Read incoming packets, decode them, and pass them along to
+-- the event channel.
 clientSocketLoop :: Int -> Handle -> Chan ServerEvent -> IO ()
 clientSocketLoop i h events =
-  handle ignoreIOException $
+  handle ignoreExceptions $
   forever $ do c <- hGetClientCommand h
                writeChan events $ ClientEvent i c
+
+-- | Send a command to a collection of clients
+announce :: Handles -> ServerCommand -> IO ()
+announce hs msg =
+  let packet = mkServerPacket msg in
+  forM_ (listHandles hs) $ \(_name,h) ->
+     handle ignoreExceptions $
+     hPutServerPacket h packet
+
+-- | Send a command to a single client identified by id.
+announceOne ::
+  Handles ->
+  Int {- ^ client id -} ->
+  ServerCommand ->
+  IO ()
+announceOne hs i msg =
+  let packet = mkServerPacket msg in
+  for_ (lookupHandle i hs) $ \h ->
+  handle ignoreExceptions $
+  hPutServerPacket h packet
+
+ignoreExceptions :: SomeException -> IO ()
+ignoreExceptions _ = return ()
+
+-----------------------------------------------------------------------
+-- Game logic
+-----------------------------------------------------------------------
 
 readyCountdown :: Handles -> ServerWorld -> IO ServerWorld
 readyCountdown hs w =
@@ -82,26 +116,19 @@ readyCountdown hs w =
      announce hs ServerReady
      return w { serverMode = Playing }
 
-newGame :: ServerEnv -> ServerWorld -> IO (ServerWorld, [ServerCommand])
+-- | Construct a new game world preserving the scores from
+-- the previous world and adding the lobby players in.
+newGame :: ServerEnv -> ServerWorld -> IO ServerWorld
 newGame env w =
-  do let scores = serverScores w
-               ++ [(i,u,0) | (i,u) <- serverLobby w]
-     w' <- initServerWorld env scores
-     return (w', [generateSetWorld w'])
+  do let scores = serverScores w ++ [(i,u,0) | (i,u) <- serverLobby w]
+     initServerWorld env scores
 
 generateSetWorld :: ServerWorld -> ServerCommand
 generateSetWorld w =
-  SetWorld [(npcName npc, npcPos npc, npcFacing npc) | npc <- allNpcs w]
+  SetWorld [(charName char, charPos char, charFacing char) | char <- allCharacters w]
 
-allNpcs :: ServerWorld -> [NPC]
-allNpcs w = map playerNpc (serverPlayers w) ++ serverNpcs w
-
-isStuckPlayer :: Player -> Bool
-isStuckPlayer p =
-  case npcState (playerNpc p) of
-    Dead          -> True
-    Attacking {}  -> True
-    _             -> False
+allCharacters :: ServerWorld -> [Character]
+allCharacters w = map playerCharacter (serverPlayers w) ++ serverNpcs w
 
 updateWorldForCommand ::
   ServerEnv ->
@@ -114,14 +141,14 @@ updateWorldForCommand env i hs w msg =
   do let (me,them) = fromMaybe (error "clientSocketLoop")
                    $ extractPlayer i $ serverPlayers w
          mapPlayer f = w { serverPlayers = f me : them }
-         mapMyNpc = mapPlayer . mapPlayerNpc
+         mapMyNpc = mapPlayer . mapPlayerCharacter
 
      case msg of
        NewGame | serverMode w == Stopped
                  || not (isInLobby i w)
                     && length (serverPlayers w) == 1 ->
-                        do (w',m) <- newGame env w
-                           forM_ m $ announce hs
+                        do w' <- newGame env w
+                           announce hs $ generateSetWorld w
                            readyCountdown hs w'
                | otherwise -> return w
 
@@ -129,7 +156,7 @@ updateWorldForCommand env i hs w msg =
 
        ClientSmoke
          | hasSmokebombs me ->
-           do announce hs $ ServerSmoke $ npcPos $ playerNpc me
+           do announce hs $ ServerSmoke $ charPos $ playerCharacter me
               return $ mapPlayer consumeSmokebomb
 
        ClientCommand cmd ->
@@ -138,14 +165,14 @@ updateWorldForCommand env i hs w msg =
                 -- Disregard where the player says he is moving from
              | pointInBox pos boardMin boardMax ->
                do announce hs $ ServerCommand i
-                    $ Move (npcPos (playerNpc me)) pos
-                  return $ mapMyNpc $ \npc -> walkingNPC npc pos
+                    $ Move (charPos (playerCharacter me)) pos
+                  return $ mapMyNpc $ walkingCharacter pos
              where
-             pos = constrainPoint (npcPos (playerNpc me)) pos0
+             pos = constrainPoint (charPos (playerCharacter me)) pos0
 
            Stop     ->
                do announce hs $ ServerCommand i cmd
-                  return $ mapMyNpc $ \npc -> waitingNPC npc Nothing False
+                  return $ mapMyNpc $ waitingCharacter Nothing False
 
            Attack   ->
                do let (me', them', npcs', cmds, kills)
@@ -173,11 +200,8 @@ updateWorldForCommand env i hs w msg =
            _        -> return w
        _          -> return w
 
-isDeadPlayer :: Player -> Bool
-isDeadPlayer p = Dead == npcState (playerNpc p)
-
 serverScores :: ServerWorld -> [(Int,String,Int)]
-serverScores w = [ (npcName (playerNpc p), playerUsername p, playerScore p)
+serverScores w = [ (charName (playerCharacter p), playerUsername p, playerScore p)
                  | p <- serverPlayers w ]
 
 tickThread :: Chan ServerEvent -> IO ()
@@ -193,15 +217,15 @@ initServerWorld env scores =
          serverMode  = Stopped
          serverLobby = []
      serverPlayers   <- mapM (\(i,u,s) -> newPlayer i u s) scores
-     serverNpcs      <- mapM (initServerNPC True) npcIds
+     serverNpcs      <- mapM (initServerCharacter True) npcIds
      return ServerWorld { .. }
 
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
 updateServerWorld hs t w
   | serverMode w /= Playing = return w
   | otherwise =
-     do pcs'  <- mapM (updatePlayer hs t) $ serverPlayers w
-        npcs' <- mapM (updateNPC hs t True) $ serverNpcs w
+     do pcs'  <- mapM (playerLogic    hs t     ) $ serverPlayers w
+        npcs' <- mapM (characterLogic hs t True) $ serverNpcs w
 
         let winners = filter isWinner pcs'
 
@@ -249,37 +273,34 @@ addVictory winners p
 
 
 playerName :: Player -> Int
-playerName = npcName . playerNpc
+playerName = charName . playerCharacter
 
-updatePlayer :: Handles -> Float -> Player -> IO Player
-updatePlayer hs t p =
-  do npc' <- updateNPC hs t False $ playerNpc p
-     let p' = p { playerNpc = npc' }
-     case whichPillar (npcPos npc') of
+playerLogic :: Handles -> Float -> Player -> IO Player
+playerLogic hs t p =
+  do char <- characterLogic hs t False $ playerCharacter p
+     let p' = p { playerCharacter = char }
+     case whichPillar (charPos char) of
        Just i | i `notElem` playerVisited p -> 
          do announce hs ServerDing
             return p' { playerVisited = i : playerVisited p' }
        _ -> return p'
 
-isWinner :: Player -> Bool
-isWinner p = length (playerVisited p) == length pillars
-
-updateNPC :: Handles -> Float -> Bool -> NPC -> IO NPC
-updateNPC hs t think npc =
-  do let (npc',_,mbTask) = updateNPC' t npc
+characterLogic :: Handles -> Float -> Bool -> Character -> IO Character
+characterLogic hs t think char =
+  do let (char',_,mbTask) = stepCharacter t char
 
      case guard think >> mbTask of
 
        Just ChooseWait ->
          do time <- pickWaitTime True
-            return $ waitingNPC npc' time False
+            return $ waitingCharacter time False char'
 
        Just ChooseDestination ->
          do tgt <- randomBoardPoint
-            announce hs $ ServerCommand (npcName npc') (Move (npcPos npc) tgt)
-            return $ walkingNPC npc' tgt
+            announce hs $ ServerCommand (charName char') (Move (charPos char) tgt)
+            return $ walkingCharacter tgt char'
 
-       Nothing -> return npc'
+       Nothing -> return char'
 
 constrainPoint :: Point -> Point -> Point
 constrainPoint from
@@ -312,28 +333,10 @@ lookupHandle i (Handles xs) = lookup i xs
 nullHandles :: Handles -> Bool
 nullHandles (Handles xs) = null xs
 
-announceOne :: Handles -> Int -> ServerCommand -> IO ()
-announceOne hs i msg =
-  let packet = mkServerPacket msg in
-  for_ (lookupHandle i hs) $ \h ->
-  handle ignoreIOException $
-  hPutServerPacket h packet
-
--- Dead handles get cleaned up in 'announce'
-ignoreIOException :: IOException -> IO ()
-ignoreIOException _ = return ()
-
-announce :: Handles -> ServerCommand -> IO ()
-announce hs msg =
-  let packet = mkServerPacket msg in
-  forM_ (listHandles hs) $ \(_name,h) ->
-     handle ignoreIOException $
-     hPutServerPacket h packet
-
 extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
 extractPlayer _ [] = Nothing
 extractPlayer i (p:ps)
-  | npcName (playerNpc p) == i = return (p,ps)
+  | charName (playerCharacter p) == i = return (p,ps)
   | otherwise = do (x,xs) <- extractPlayer i ps
                    return (x,p:xs)
 
@@ -416,5 +419,23 @@ eventLoop env hs w events lastTick
              Nothing -> -- This really shouldn't happen
               eventLoop env hs w events lastTick
 
+-----------------------------------------------------------------------
+-- Player predicates
+-----------------------------------------------------------------------
+
 isInLobby :: Int -> ServerWorld -> Bool
 isInLobby i w = i `elem` map fst (serverLobby w)
+
+isStuckPlayer :: Player -> Bool
+isStuckPlayer p =
+  case charState (playerCharacter p) of
+    Dead          -> True
+    Attacking {}  -> True
+    _             -> False
+
+isDeadPlayer :: Player -> Bool
+isDeadPlayer p = Dead == charState (playerCharacter p)
+
+isWinner :: Player -> Bool
+isWinner p = length (playerVisited p) == length pillars
+

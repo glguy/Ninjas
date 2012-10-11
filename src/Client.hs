@@ -12,6 +12,8 @@ import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 
 import Simulation
+import Character
+import VectorUtils
 import qualified Anim
 
 moveButton, stopButton, attackButton, smokeButton,
@@ -79,8 +81,8 @@ getInitialWorld h =
 
 initClientWorld :: Anim.World -> [(Int, Point, Vector)] -> World
 initClientWorld anim poss =
-  World { worldNpcs     = [initClientNPC (Anim.npc anim) i p v
-                          | (i,p,v) <- poss ]
+  World { worldCharacters = [initClientCharacter (Anim.npc anim) i p v
+                                | (i,p,v) <- poss ]
         , dingTimers    = []
         , worldMessages = []
         , smokeTimers   = []
@@ -106,7 +108,7 @@ drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : map (drawPillar w) pillars
-               ++ map drawNPC (worldNpcs w)
+               ++ map drawCharacter (worldCharacters w)
                ++ map drawSmoke (smokeTimers w)
                ++ messagePictures (worldMessages w)
 
@@ -146,13 +148,13 @@ borderPicture   = color red $ rectangleWire (2 * ninjaRadius + width)
                                             (2 * ninjaRadius + height)
   where (width,height) = subPt boardMax boardMin
 
-drawNPC :: ClientNPC -> Picture
-drawNPC cnpc
-    = translateV (npcPos npc)
+drawCharacter :: ClientCharacter -> Picture
+drawCharacter c
+    = translateV (charPos char)
     $ rotate (negate $ radToDeg rads)
-    $ Anim.curFrame (clientAnim cnpc)
-  where npc   = clientNPC cnpc
-        rads  = argV (npcFacing npc)
+    $ Anim.curFrame (clientAnim c)
+  where char  = clientCharacter c
+        rads  = argV (charFacing char)
 
 
 
@@ -175,7 +177,7 @@ clearMessages var = modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
-  w { worldNpcs   = map (updateClientNPC npcLooks d) (worldNpcs w)
+  w { worldCharacters = map (stepClientCharacter npcLooks d) (worldCharacters w)
     , dingTimers  = [ t - d      |  t     <- dingTimers  w, t > d]
     , smokeTimers = [(pt, Anim.update d a) |
                             (pt,a) <- smokeTimers w, not (Anim.finished d a) ]
@@ -183,20 +185,20 @@ updateClientWorld d w =
     }
   where npcLooks = Anim.npc (appearance w)
 
-updateClientNPC :: Anim.NPC -> Float -> ClientNPC -> ClientNPC
-updateClientNPC looks d cnpc =
-  case updateNPC' d (clientNPC cnpc) of
-    (npc,changed,_)
-      | changed   -> newNpcState looks npc
-      | otherwise -> cnpc { clientNPC = npc
-                          , clientAnim = Anim.update d (clientAnim cnpc) }
+stepClientCharacter :: Anim.NPC -> Float -> ClientCharacter -> ClientCharacter
+stepClientCharacter looks elapsed clientChar =
+  case stepCharacter elapsed (clientCharacter clientChar) of
+    (char,changed,_)
+      | changed   -> newClientCharacter looks char
+      | otherwise -> clientChar { clientCharacter = char
+                                , clientAnim = Anim.update elapsed (clientAnim clientChar) }
 
-newNpcState :: Anim.NPC -> NPC -> ClientNPC
-newNpcState looks clientNPC = ClientNPC { .. }
+newClientCharacter :: Anim.NPC -> Character -> ClientCharacter
+newClientCharacter looks clientCharacter = ClientCharacter { .. }
   where
-  clientAnim = case npcState clientNPC of
+  clientAnim = case charState clientCharacter of
                  Walking {}               -> Anim.walk looks
-                 Waiting w | npcStunned w -> Anim.stun   looks
+                 Waiting w | waitStunned w -> Anim.stun   looks
                            | otherwise    -> Anim.stay   looks
                  Attacking {}             -> Anim.attack looks
                  Dead                     -> Anim.die    looks
@@ -217,21 +219,21 @@ clientUpdates h var = forever $
                            in w { smokeTimers = (pt,smoke) : smokeTimers w }
       SetWorld poss     -> initClientWorld (appearance w) poss
       ServerCommand i m -> let f = npcCommand w m
-                           in w { worldNpcs = updateNpcList i f $ worldNpcs w }
+                           in w { worldCharacters = updateNpcList i f $ worldCharacters w }
       _                 -> w
 
   npcCommand w cmd cnpc =
-    let npc = clientNPC cnpc
-    in newNpcState (Anim.npc $ appearance w) $
+    let npc = clientCharacter cnpc
+    in newClientCharacter (Anim.npc $ appearance w) $
        case cmd of
-         Move from to   -> walkingNPC npc { npcPos = from } to
-         Stop           -> waitingNPC npc Nothing False
-         Stun           -> stunnedNPC npc
-         Die            -> deadNPC npc
-         Attack         -> attackNPC npc
+         Move from to   -> walkingCharacter to npc { charPos = from }
+         Stop           -> waitingCharacter Nothing False npc
+         Stun           -> stunnedCharacter npc
+         Die            -> deadCharacter npc
+         Attack         -> attackingCharacter npc
 
-updateNpcList :: Int -> (ClientNPC -> ClientNPC) -> [ClientNPC] -> [ClientNPC]
+updateNpcList :: Int -> (ClientCharacter -> ClientCharacter) -> [ClientCharacter] -> [ClientCharacter]
 updateNpcList _ _ [] = []
 updateNpcList i f (n:ns)
-  | npcName (clientNPC n) == i = f n : ns
+  | charName (clientCharacter n) == i = f n : ns
   | otherwise      = n : updateNpcList i f ns

@@ -12,6 +12,8 @@ import System.Random (randomRIO)
 
 import qualified Anim
 import NetworkMessages
+import VectorUtils
+import Character
 
 -- | Smallest point on the board
 boardMin :: Point
@@ -20,14 +22,6 @@ boardMin = (-350,-250)
 -- | Largest point on the board
 boardMax :: Point
 boardMax = (350,250)
-
--- | Pixels per second traveled by ninjas
-speed :: Float
-speed = 100
-
--- | Duration in seconds a player is stunned after an attack
-attackDelay :: Float
-attackDelay = 1
 
 -- | Maximum time an NPC will wait before choosing a new destination
 restTime :: Float
@@ -47,10 +41,6 @@ attackDistance = 50
 attackAngle    :: Float
 attackAngle    = pi / 3
 
--- | Duration in second for which an NPC will be stunned after an attack
-stunTime :: Float
-stunTime = 3
-
 -- | The number of time update events gloss should attempt to run per second
 eventsPerSecond :: Int
 eventsPerSecond = 100
@@ -63,16 +53,8 @@ pillars = [(0,0), (275, 175), (-275, 175), (-275, -175), (275, -175)]
 pillarSize :: Float
 pillarSize = 40
 
-data NPC      = NPC
-  { npcName   :: Int
-  , npcPos    :: Point
-  , npcFacing :: Vector -- Unit vector
-  , npcState  :: State
-  }
-  deriving (Read, Show, Eq)
-
 data Player   = Player
-  { playerNpc      :: NPC
+  { playerCharacter :: Character
   , playerUsername :: String
   , playerScore    :: Int
   , playerVisited  :: [Int]
@@ -80,31 +62,13 @@ data Player   = Player
   }
   deriving (Show, Read, Eq)
 
-data State
-  = Walking WalkInfo
-  | Waiting WaitInfo
-  | Dead
-  | Attacking Float
-  deriving (Show, Read, Eq)
-
-data WalkInfo = Walk { npcTarget    :: Point
-                     -- Cached, so that we don't recompute all the time.
-                     , npcDist      :: Float
-                     , npcVelocity  :: Vector
-                     }
-  deriving (Show, Read, Eq)
-
-data WaitInfo = Wait { npcWaiting :: Maybe Float, npcStunned :: Bool }
-  deriving (Show, Read, Eq)
-
-
-data ClientNPC = ClientNPC
-  { clientNPC        :: NPC
+data ClientCharacter = ClientCharacter
+  { clientCharacter  :: Character
   , clientAnim       :: Anim.Animation
   }
 
 data World = World
-  { worldNpcs        :: [ClientNPC]
+  { worldCharacters  :: [ClientCharacter]
   , dingTimers       :: [Float]
   , smokeTimers      :: [(Point, Anim.Animation)]
   , worldMessages    :: [String]
@@ -112,7 +76,7 @@ data World = World
   }
 
 data ServerWorld = ServerWorld
-  { serverNpcs    :: [NPC]
+  { serverNpcs    :: [Character]
   , serverPlayers :: [Player]
   , serverMode    :: ServerMode
   , serverLobby   :: [(Int,String)]
@@ -121,147 +85,58 @@ data ServerWorld = ServerWorld
 data ServerMode = Playing | Starting | Stopped
   deriving (Eq, Read, Show)
 
-data ThinkTask = ChooseWait | ChooseDestination
+-- | Lift a function on Characters to one on Players
+mapPlayerCharacter :: (Character -> Character) -> Player -> Player
+mapPlayerCharacter f p = p { playerCharacter = f (playerCharacter p) }
 
-
-
--- | Compute a new NPC given a number of elapsed seconds. An optional
--- update task will be returned if the server should compute a new
--- goal for the NPC. Clients will ignore this task and wait for the
--- server to send an update.
-updateNPC' ::
-  Float {- ^ elapsed seconds -} ->
-  NPC   ->
-  (NPC, Bool, Maybe ThinkTask) -- (new npc, did we change states, AI task)
-updateNPC' elapsed npc =
-  case state of
-    Walking w
-      | npcDist w < step -> done (Just ChooseWait)
-      | otherwise ->
-        working (Walking w { npcDist = npcDist w - step })
-                npc { npcPos = newPos }
-
-      where step = elapsed * speed
-            newPos = addPt (mulSV elapsed (npcVelocity w)) (npcPos npc)
-
-    Waiting w ->
-      case npcWaiting w of
-        Nothing -> working state npc
-        Just todo
-          | todo < elapsed -> done (Just ChooseDestination)
-          | otherwise ->
-              working (Waiting w { npcWaiting = Just (todo - elapsed) }) npc
-
-
-    Attacking delay
-      | elapsed > delay -> done Nothing
-      | otherwise       -> working (Attacking (delay - elapsed)) npc
-
-    Dead -> working state npc
-
-  where
-  state       = npcState npc
-  done next   = (npc { npcState = Waiting Wait { npcWaiting = Nothing
-                                               , npcStunned = False } }
-                , True
-                , next)
-  working s n = (n { npcState = s}, False, Nothing)
-
--- | Lift a function on NPCs to one on Players
-mapPlayerNpc :: (NPC -> NPC) -> Player -> Player
-mapPlayerNpc f p = p { playerNpc = f (playerNpc p) }
-
--- | Update an NPC to have the goal of walking to a given point.
-walkingNPC :: NPC -> Point -> NPC
-walkingNPC npc npcTarget = npc { npcState = state
-                               , npcFacing = facing }
-  where
-  state       = Walking Walk { .. }
-
-  facing      | npcDist > 0.001 = mulSV (1 / npcDist) path
-              | otherwise       = npcFacing npc
-
-  npcVelocity = mulSV speed facing
-
-  path        = subPt npcTarget (npcPos npc)
-  npcDist     = magV path
-
--- | Update an NPC to have the goal of waiting for an optional
--- duration and optionally to be drawn as stunned. If a duration
--- is specified the NPC will be updated automatically by the server.
--- NPCs without a duration are typically players.
-waitingNPC :: NPC -> Maybe Float -> Bool -> NPC
-waitingNPC npc npcWaiting npcStunned = npc { npcState = state }
-  where
-  state = Waiting Wait { .. }
-
--- | Update an NPC to be dead
-deadNPC :: NPC -> NPC
-deadNPC npc = npc { npcState = Dead }
-
--- | Update an NPC to be stunned for the default stun duration.
-stunnedNPC :: NPC -> NPC
-stunnedNPC npc = waitingNPC npc (Just stunTime) True
-
--- | Update an NPC to be in the attacking state for the
--- default attack duration.
-attackNPC :: NPC -> NPC
-attackNPC npc = npc { npcState = Attacking attackDelay }
-
--- | Given an attacking player, the other players, and the NPCs
+-- | Given an attacking player, the other players, and the Characters
 -- compute the new state of the attacker, the other players, and
--- the NPCs as well as a list of messages to broadcast to all
+-- the Characters as well as a list of messages to broadcast to all
 -- players and a list of the names of players who were killed
 -- in the attack.
 performAttack ::
   Player   {- ^ attacker              -} ->
   [Player] {- ^ possible kill targets -} ->
-  [NPC]    {- ^ possible stun targets -} ->
-  (Player, [Player], [NPC], [ServerCommand], [Int])
+  [Character] {- ^ possible stun targets -} ->
+  (Player, [Player], [Character], [ServerCommand], [Int])
 performAttack attacker players npcs =
-  ( mapPlayerNpc attackNPC attacker
+  ( mapPlayerCharacter attackingCharacter attacker
   , players'
   , npcs'
   , attackCmd : catMaybes (commands1 ++ commands2)
   , catMaybes deathnotes
   )
   where
-  attackCmd = ServerCommand (npcName pnpc) Attack
+  attackCmd = ServerCommand (charName pnpc) Attack
 
   (players', commands1, deathnotes) = unzip3 $ map checkKill players
   (npcs'   , commands2) = unzip $ map checkStun npcs
 
-  pnpc             = playerNpc attacker
+  pnpc             = playerCharacter attacker
 
   affected npc     = attackLen       <= attackDistance
-                  && cos attackAngle <= npcFacing pnpc `dotV` attackVector1
+                  && cos attackAngle <= charFacing pnpc `dotV` attackVector1
     where
-    attackVector   = subPt (npcPos npc) (npcPos pnpc)
+    attackVector   = subPt (charPos npc) (charPos pnpc)
     attackLen      = magV attackVector
     attackVector1  = mulSV (recip attackLen) attackVector
 
   checkKill player
-    | npcState npc /= Dead && affected npc
-          = ( player { playerNpc = deadNPC npc }
-                     , Just (ServerCommand (npcName npc) Die)
-                     , Just (npcName npc)
+    | charState npc /= Dead && affected npc
+          = ( player { playerCharacter = deadCharacter npc }
+                     , Just (ServerCommand (charName npc) Die)
+                     , Just (charName npc)
                      )
     | otherwise    = ( player, Nothing, Nothing )
     where
-    npc = playerNpc player
+    npc = playerCharacter player
 
   checkStun npc
     | not (isStunned npc) && affected npc
-                   = ( stunnedNPC npc
-                     , Just (ServerCommand (npcName npc) Stun)
+                   = ( stunnedCharacter npc
+                     , Just (ServerCommand (charName npc) Stun)
                      )
     | otherwise    = ( npc, Nothing )
-
-isStunned :: NPC -> Bool
-isStunned npc =
-  case npcState npc of
-    Waiting Wait { npcStunned = True } -> True
-    _                                  -> False
 
 -- | Compute a random point inside a box.
 randomPoint :: Point -> Point -> IO Point
@@ -281,44 +156,36 @@ randomUnitVector =
      let rads = degToRad $ fromInteger degrees
      return $ unitVectorAtAngle rads
 
--- | Add two vectors
-addPt :: Vector -> Vector -> Vector
-addPt (x,y) (a,b) = (x+a,y+b)
-
--- | Subtract two vectors
-subPt :: Vector -> Vector -> Vector
-subPt (x,y) (a,b) = (x-a,y-b)
-
--- | Construct a new NPC given a name, a position,
+-- | Construct a new character given a name, a position,
 -- and a facing unit vector. This function is used
 -- by clients who are told the parameters by the
 -- server.
-initClientNPC :: Anim.NPC -> Int -> Point -> Vector -> ClientNPC
-initClientNPC anim npcName npcPos npcFacing =
-  let npcState = Waiting Wait { npcWaiting = Nothing, npcStunned = False }
+initClientCharacter :: Anim.NPC -> Int -> Point -> Vector -> ClientCharacter
+initClientCharacter anim charName charPos charFacing =
+  let charState = Waiting Wait { waitWaiting = Nothing, waitStunned = False }
       clientAnim = Anim.stay anim
-      clientNPC = NPC { .. }
-  in  ClientNPC { .. }
+      clientCharacter = Character { .. }
+  in  ClientCharacter { .. }
 
--- | Construct a new NPC given a name, a position,
+-- | Construct a new character given a name, a position,
 -- and a facing unit vector. When think is True,
--- the NPC will be scheduled to begin walking
+-- the character will be scheduled to begin walking
 -- after a random duration.
-initServerNPC :: Bool -> Int -> IO NPC
-initServerNPC think npcName =
-  do npcPos     <- randomBoardPoint
-     npcFacing  <- randomUnitVector
-     npcWaiting <- pickWaitTime think
-     let npcStunned = False
-         npcState = Waiting Wait { .. }
-     return NPC { .. }
+initServerCharacter :: Bool -> Int -> IO Character
+initServerCharacter think charName =
+  do charPos     <- randomBoardPoint
+     charFacing  <- randomUnitVector
+     waitWaiting <- pickWaitTime think
+     let waitStunned = False
+         charState = Waiting Wait { .. }
+     return Character { .. }
 
 -- | Construct a new player given an initial number
 -- of smokebombs, an identifier, a username, and a
 -- starting score.
 initPlayer :: Int -> Int -> String -> Int -> IO Player
 initPlayer smokes name playerUsername playerScore =
-  do playerNpc <- initServerNPC False name
+  do playerCharacter <- initServerCharacter False name
      let playerVisited = []
          playerSmokes  = smokes
      return Player { .. }
@@ -350,33 +217,12 @@ hasSmokebombs p = playerSmokes p > 0
 consumeSmokebomb :: Player -> Player
 consumeSmokebomb p = p { playerSmokes = playerSmokes p - 1 }
 
-instance NFData NPC where
-  rnf npc               = rnf (npcName   npc) `seq`
-                          rnf (npcPos    npc) `seq`
-                          rnf (npcFacing npc) `seq`
-                          rnf (npcState  npc)
-
 instance NFData Player where
-  rnf p                 = rnf (playerNpc      p) `seq`
+  rnf p                 = rnf (playerCharacter p) `seq`
                           rnf (playerUsername p) `seq`
                           rnf (playerScore    p) `seq`
                           rnf (playerVisited  p) `seq`
                           rnf (playerSmokes   p)
-
-instance NFData State where
-  rnf (Walking w)       = rnf w
-  rnf (Waiting w)       = rnf w
-  rnf Dead              = ()
-  rnf (Attacking x)     = rnf x
-
-instance NFData WalkInfo where
-  rnf w                 = rnf (npcTarget   w) `seq`
-                          rnf (npcDist     w) `seq`
-                          rnf (npcVelocity w)
-
-instance NFData WaitInfo where
-  rnf w                 = rnf (npcWaiting w) `seq`
-                          rnf (npcStunned w)
 
 instance NFData ServerWorld where
   rnf w                 = rnf (serverNpcs    w) `seq`
