@@ -200,7 +200,6 @@ addVictory winners p
                                 p { playerScore = 1 + playerScore p }
   | otherwise = p
 
-
 playerName :: Player -> Int
 playerName = charName . playerCharacter
 
@@ -209,7 +208,7 @@ playerLogic hs t p =
   do char <- characterLogic hs t False $ playerCharacter p
      let p' = p { playerCharacter = char }
      case whichPillar (charPos char) of
-       Just i | i `notElem` playerVisited p -> 
+       Just i | i `notElem` playerVisited p ->
          do announce hs ServerDing
             return p' { playerVisited = i : playerVisited p' }
        _ -> return p'
@@ -226,7 +225,8 @@ characterLogic hs t think char =
 
        Just ChooseDestination ->
          do tgt <- randomBoardPoint
-            announce hs $ ServerCommand (charName char') (Move (charPos char) tgt)
+            announce hs $ ServerCommand (charName char')
+                        $ Move (charPos char) tgt
             return $ walkingCharacter tgt char'
 
        Nothing -> return char'
@@ -252,10 +252,14 @@ connect hs i w =
   do announceOne hs i $ generateSetWorld w
      return w
 
-command :: ServerEnv -> Handles -> ConnectionId -> ClientCommand -> ServerWorld ->
+command ::
+  ServerEnv ->
+  Handles ->
+  ConnectionId {- ^ player who sent command -} ->
+  ClientCommand ->
+  ServerWorld ->
   IO ServerWorld
-command _ hs (ConnectionId i) (ClientJoin name) w = addClient hs i name w
-
+command _   hs (ConnectionId i) (ClientJoin name) w = addClient hs i name w
 command env hs (ConnectionId i) msg w
       -- The ids of lobby players might overlap with NPCs
     | isInLobby i w
@@ -269,7 +273,7 @@ disconnect hs (ConnectionId i) w =
        Just (p,ps) ->
          do announce hs $ ServerCommand i Die
             announce hs $ ServerMessage $ playerUsername p ++ " disconnected"
-            
+
             when (null ps) $ announce hs $ ServerMessage "Game Over"
 
             let mode | null ps        = Stopped
@@ -301,7 +305,7 @@ performAttack :: Handles -> Int -> ServerWorld -> IO ServerWorld
 performAttack hs attackId w =
   do let Just (attacker, them) = extractPlayer attackId $ serverPlayers w
      let attackChar = playerCharacter attacker
-     
+
      announce hs $ ServerCommand (charName attackChar) Attack
 
      let me' =  mapPlayerCharacter attackingCharacter attacker

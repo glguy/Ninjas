@@ -13,7 +13,7 @@ gamePort = PortNumber 16000
 
 data Command
   = Move Point Point
-  | Stop 
+  | Stop
   | Attack
   | Stun
   | Die
@@ -25,7 +25,7 @@ data ClientCommand
   | ClientJoin String
   | NewGame
   deriving (Show, Read, Eq)
-  
+
 data ServerCommand
   = ServerCommand Int Command
   | SetWorld [(Int,Point,Vector)]

@@ -43,10 +43,9 @@ canHitPoint char pt = inRange && inFront
   -- u·v = ❘v❘ ❘u❘ cos Θ
   inFront = cos attackAngle * attackLen
          <= charFacing char `dotV` attackVector
-  
+
   attackVector   = subPt pt (charPos char)
   attackLen      = magV attackVector
-
 
 -- | Compute a random point inside a box.
 randomPoint :: Point -> Point -> IO Point
