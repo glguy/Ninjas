@@ -30,7 +30,7 @@ data ServerWorld = ServerWorld
   , serverLobby   :: [(Int,String)]
   }
 
-data ServerMode = Playing | Starting | Stopped
+data ServerMode = Playing | Starting Float | Stopped
   deriving (Eq, Read, Show)
 
 -- | Lift a function on Characters to one on Players

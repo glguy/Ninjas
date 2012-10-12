@@ -1,7 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
-import Control.Concurrent (threadDelay)
 import Control.Monad (forM_, when, guard)
 import Data.List (intercalate, sortBy, (\\))
 import Data.Maybe (fromMaybe)
@@ -53,11 +52,8 @@ serverMain env =
 
 readyCountdown :: Handles -> ServerWorld -> IO ServerWorld
 readyCountdown hs w =
-  do forM_ ["3","2","1", "Capture the Diamonds!"] $ \txt ->
-       do announce hs $ ServerMessage txt
-          threadDelay 600000
-     announce hs ServerReady
-     return w { serverMode = Playing }
+  do announce hs $ ServerMessage "3"
+     return w { serverMode = Starting 0 }
 
 -- | Construct a new game world preserving the scores from
 -- the previous world and adding the lobby players in.
@@ -158,10 +154,26 @@ initServerWorld env scores =
      serverNpcs      <- mapM (initServerCharacter True) npcIds
      return ServerWorld { .. }
 
+startingMode :: Handles -> Float -> Float -> ServerWorld -> IO ServerWorld
+startingMode hs t duration w =
+  do when (boundary (1*0.6)) $ announce hs $ ServerMessage "2"
+     when (boundary (2*0.6)) $ announce hs $ ServerMessage "1"
+     when (boundary (3*0.6)) $ announce hs $ ServerMessage "GO!"
+     mode' <- if boundary (4*0.6)
+                then do announce hs ServerReady
+                        return Playing
+                else return $ Starting duration'
+     return $ w { serverMode = mode' }
+  where
+  duration'	= duration + t
+  boundary x 	= duration < x && x <= duration'
+
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
-updateServerWorld hs t w
-  | serverMode w /= Playing = return w
-  | otherwise =
+updateServerWorld hs t w =
+  case serverMode w of
+    Stopped -> return w
+    Starting duration -> startingMode hs t duration w
+    Playing ->
      do pcs'  <- mapM (playerLogic    hs t     ) $ serverPlayers w
         npcs' <- mapM (characterLogic hs t True) $ serverNpcs w
 
