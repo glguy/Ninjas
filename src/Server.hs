@@ -114,28 +114,7 @@ updateWorldForCommand env i hs w msg =
                   return $ mapMyNpc $ waitingCharacter Nothing False
 
            Attack   ->
-               do let (me', them', npcs', cmds, kills)
-                        = performAttack me them (serverNpcs w)
-                  forM_ cmds  $ announce hs
-                  forM_ kills $ \killed ->
-                    do let killer = playerUsername me
-                       announceOne hs (ConnectionId killed)
-                         $ ServerMessage $ "Killed by " ++ killer
-                  
-                  let winningAttack = all isDeadPlayer them'
-                  everyone <- if winningAttack
-                            then endGame hs [me'] (me' : them') "force"
-                            else return $ me' : them'
-
-                  let mode
-                        | winningAttack = Stopped
-                        | otherwise     = Playing
-
-                  return $ w { serverPlayers = everyone
-                             , serverNpcs    = npcs'
-                             , serverMode    = mode
-                             }
-
+               do performAttack hs i w
            _        -> return w
        _          -> return w
 
@@ -294,7 +273,7 @@ disconnect hs (ConnectionId i) w =
             when (null ps) $ announce hs $ ServerMessage "Game Over"
 
             let mode | null ps        = Stopped
-                     | otherwise      = Playing
+                     | otherwise      = serverMode w
 
             return w { serverPlayers = ps
                      , serverMode    = mode
@@ -317,6 +296,51 @@ addClient hs i name w =
      announce hs $ ServerMessage $ name ++ " joined lobby"
      return $ w { serverLobby = (i,name) : serverLobby w }
  -- XXX : Check that the client isn't already registered
+
+performAttack :: Handles -> Int -> ServerWorld -> IO ServerWorld
+performAttack hs attackId w =
+  do let Just (attacker, them) = extractPlayer attackId $ serverPlayers w
+     let attackChar = playerCharacter attacker
+     
+     announce hs $ ServerCommand (charName attackChar) Attack
+
+     let me' =  mapPlayerCharacter attackingCharacter attacker
+     them' <- mapM (attackPlayer hs attacker) them
+     npcs' <- mapM (attackCharacter hs attackChar) (serverNpcs w)
+
+     let winningAttack = all isDeadPlayer them'
+     everyone <- if winningAttack
+                   then endGame hs [me'] (me' : them') "force"
+                   else return $ me' : them'
+
+     let mode
+           | winningAttack = Stopped
+           | otherwise     = Playing
+
+     return $ w { serverPlayers = everyone
+                , serverNpcs    = npcs'
+                , serverMode    = mode
+                }
+
+attackCharacter :: Handles -> Character -> Character -> IO Character
+attackCharacter hs attacker target
+  | canHitPoint attacker (charPos target) =
+     do announce hs $ ServerCommand (charName target) Stun
+        return $ stunnedCharacter target
+  | otherwise = return target
+
+attackPlayer :: Handles -> Player -> Player -> IO Player
+attackPlayer hs attacker target
+  | canHitPoint attackerChar (charPos targetChar) =
+     do let attackerName = playerUsername attacker
+        announce hs $ ServerCommand (charName targetChar) Die
+        announceOne hs (ConnectionId (charName targetChar))
+          $ ServerMessage $ "Killed by " ++ attackerName
+        return $ mapPlayerCharacter deadCharacter target
+  | otherwise = return target
+  where
+  targetChar = playerCharacter target
+  attackerChar = playerCharacter attacker
 
 -----------------------------------------------------------------------
 -- Player predicates

@@ -2,7 +2,6 @@
 
 module Simulation where
 
-import Data.Maybe (catMaybes)
 import Data.List  (findIndex)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Data.Vector
@@ -10,7 +9,6 @@ import Graphics.Gloss.Geometry.Angle
 import System.Random (randomRIO)
 
 import Character
-import NetworkMessages
 import Parameters
 import VectorUtils
 
@@ -37,54 +35,18 @@ data ServerMode = Playing | Starting Float | Stopped
 mapPlayerCharacter :: (Character -> Character) -> Player -> Player
 mapPlayerCharacter f p = p { playerCharacter = f (playerCharacter p) }
 
--- | Given an attacking player, the other players, and the Characters
--- compute the new state of the attacker, the other players, and
--- the Characters as well as a list of messages to broadcast to all
--- players and a list of the names of players who were killed
--- in the attack.
-performAttack ::
-  Player   {- ^ attacker              -} ->
-  [Player] {- ^ possible kill targets -} ->
-  [Character] {- ^ possible stun targets -} ->
-  (Player, [Player], [Character], [ServerCommand], [Int])
-performAttack attacker players npcs =
-  ( mapPlayerCharacter attackingCharacter attacker
-  , players'
-  , npcs'
-  , attackCmd : catMaybes (commands1 ++ commands2)
-  , catMaybes deathnotes
-  )
+canHitPoint :: Character -> Point -> Bool
+canHitPoint char pt = inRange && inFront
   where
-  attackCmd = ServerCommand (charName pnpc) Attack
+  inRange = attackLen <= attackDistance
 
-  (players', commands1, deathnotes) = unzip3 $ map checkKill players
-  (npcs'   , commands2) = unzip $ map checkStun npcs
+  -- u·v = ❘v❘ ❘u❘ cos Θ
+  inFront = cos attackAngle * attackLen
+         <= charFacing char `dotV` attackVector
+  
+  attackVector   = subPt pt (charPos char)
+  attackLen      = magV attackVector
 
-  pnpc             = playerCharacter attacker
-
-  affected npc     = attackLen       <= attackDistance
-                  && cos attackAngle <= charFacing pnpc `dotV` attackVector1
-    where
-    attackVector   = subPt (charPos npc) (charPos pnpc)
-    attackLen      = magV attackVector
-    attackVector1  = mulSV (recip attackLen) attackVector
-
-  checkKill player
-    | charState npc /= Dead && affected npc
-          = ( player { playerCharacter = deadCharacter npc }
-                     , Just (ServerCommand (charName npc) Die)
-                     , Just (charName npc)
-                     )
-    | otherwise    = ( player, Nothing, Nothing )
-    where
-    npc = playerCharacter player
-
-  checkStun npc
-    | not (isStunned npc) && affected npc
-                   = ( stunnedCharacter npc
-                     , Just (ServerCommand (charName npc) Stun)
-                     )
-    | otherwise    = ( npc, Nothing )
 
 -- | Compute a random point inside a box.
 randomPoint :: Point -> Point -> IO Point
@@ -139,8 +101,10 @@ isInPillar ::
   Point {- ^ location to test -} ->
   Point {- ^ center of pillar -} ->
   Bool
-isInPillar p (x,y) = pointInBox p (x-pillarSize/2,y-pillarSize/2)
-                                  (x+pillarSize/2, y+pillarSize/2)
+isInPillar p (x,y) = pointInBox p (x-halfside, y-halfside)
+                                  (x+halfside, y+halfside)
+  where
+  halfside = pillarSize / 2
 
 -- | Determine the index, if any, of the pillar with contains a point.
 whichPillar :: Point -> Maybe Int
