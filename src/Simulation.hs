@@ -21,13 +21,6 @@ data Player   = Player
   }
   deriving (Show, Read, Eq)
 
-data ServerWorld = ServerWorld
-  { serverNpcs    :: [Character]
-  , serverPlayers :: [Player]
-  , serverMode    :: ServerMode
-  , serverLobby   :: [(Int,String)]
-  }
-
 data ServerMode = Playing | Starting Float | Stopped
   deriving (Eq, Read, Show)
 
@@ -69,8 +62,8 @@ randomUnitVector =
 -- and a facing unit vector. When think is True,
 -- the character will be scheduled to begin walking
 -- after a random duration.
-initServerCharacter :: Bool -> Int -> IO Character
-initServerCharacter think charName =
+initServerCharacter :: Bool -> IO Character
+initServerCharacter think =
   do charPos     <- randomBoardPoint
      charFacing  <- randomUnitVector
      waitWaiting <- pickWaitTime think
@@ -81,9 +74,9 @@ initServerCharacter think charName =
 -- | Construct a new player given an initial number
 -- of smokebombs, an identifier, a username, and a
 -- starting score.
-initPlayer :: Int -> Int -> String -> Int -> IO Player
-initPlayer smokes name playerUsername playerScore =
-  do playerCharacter <- initServerCharacter False name
+initPlayer :: Int -> String -> Int -> IO Player
+initPlayer smokes playerUsername playerScore =
+  do playerCharacter <- initServerCharacter False
      let playerVisited = []
          playerSmokes  = smokes
      return Player { .. }

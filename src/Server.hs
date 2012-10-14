@@ -1,13 +1,18 @@
 {-# LANGUAGE RecordWildCards #-}
 module Server (ServerEnv(..), defaultServerEnv, serverMain) where
 
-import Control.Monad (forM_, when, guard)
+import Control.Applicative (Applicative)
+import Control.Monad (when, guard)
+import Data.Foldable (for_)
+import Data.IntMap (IntMap)
 import Data.List (intercalate, sortBy, (\\))
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
+import Data.Traversable (sequenceA)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
 import Network (PortID(..))
+import qualified Data.IntMap as IntMap
 
 import Simulation
 import Character
@@ -22,6 +27,13 @@ data ServerEnv = ServerEnv
   { npcCount          :: Int
   , initialSmokebombs :: Int
   , serverPort        :: Int
+  }
+
+data ServerWorld = ServerWorld
+  { serverNpcs    :: IntMap Character
+  , serverPlayers :: IntMap Player
+  , serverMode    :: ServerMode
+  , serverLobby   :: [(Int,String)]
   }
 
 defaultServerEnv :: ServerEnv
@@ -64,10 +76,11 @@ newGame env w =
 
 generateSetWorld :: ServerWorld -> ServerCommand
 generateSetWorld w =
-  SetWorld [(charName char, charPos char, charFacing char) | char <- allCharacters w]
+  SetWorld [(i, charPos char, charFacing char) | (i,char) <- allCharacters w]
 
-allCharacters :: ServerWorld -> [Character]
-allCharacters w = map playerCharacter (serverPlayers w) ++ serverNpcs w
+allCharacters :: ServerWorld -> [(Int,Character)]
+allCharacters w = IntMap.toList (fmap playerCharacter (serverPlayers w))
+               ++ IntMap.toList (serverNpcs w)
 
 updateWorldForCommand ::
   ServerEnv ->
@@ -77,15 +90,16 @@ updateWorldForCommand ::
   ClientCommand ->
   IO ServerWorld
 updateWorldForCommand env i hs w msg =
-  do let (me,them) = fromMaybe (error "clientSocketLoop")
-                   $ extractPlayer i $ serverPlayers w
-         mapPlayer f = w { serverPlayers = f me : them }
+  do let Just me = IntMap.lookup i $ serverPlayers w
+         myPos = charPos $ playerCharacter me
+         mapPlayer f = w { serverPlayers =
+                           IntMap.update (Just . f) i (serverPlayers w) }
          mapMyNpc = mapPlayer . mapPlayerCharacter
 
      case msg of
        NewGame | serverMode w == Stopped
                  || not (isInLobby i w)
-                    && length (serverPlayers w) == 1 ->
+                    && IntMap.size (serverPlayers w) == 1 ->
                         do w' <- newGame env w
                            announce hs $ generateSetWorld w'
                            readyCountdown hs w'
@@ -104,10 +118,10 @@ updateWorldForCommand env i hs w msg =
                 -- Disregard where the player says he is moving from
              | pointInBox pos boardMin boardMax ->
                do announce hs $ ServerCommand i
-                    $ Move (charPos (playerCharacter me)) pos
+                    $ Move myPos pos
                   return $ mapMyNpc $ walkingCharacter pos
              where
-             pos = constrainPoint (charPos (playerCharacter me)) pos0
+             pos = constrainPoint myPos pos0
 
            Stop     ->
                do announce hs $ ServerCommand i cmd
@@ -119,8 +133,8 @@ updateWorldForCommand env i hs w msg =
        _          -> return w
 
 serverScores :: ServerWorld -> [(Int,String,Int)]
-serverScores w = [ (charName (playerCharacter p), playerUsername p, playerScore p)
-                 | p <- serverPlayers w ]
+serverScores w = [ (i, playerUsername p, playerScore p)
+                 | (i,p) <- IntMap.toList $ serverPlayers w ]
 
 initServerWorld :: ServerEnv -> [(Int,String,Int)] -> IO ServerWorld
 initServerWorld env scores =
@@ -129,8 +143,10 @@ initServerWorld env scores =
      let newPlayer   = initPlayer (initialSmokebombs env)
          serverMode  = Stopped
          serverLobby = []
-     serverPlayers   <- mapM (\(i,u,s) -> newPlayer i u s) scores
-     serverNpcs      <- mapM (initServerCharacter True) npcIds
+     serverPlayers   <- fmap IntMap.fromList
+                      $ mapM (\(i,u,s) -> fmap ((,) i) (newPlayer u s)) scores
+     serverNpcs      <- fmap IntMap.fromList
+                      $ mapM (\i -> fmap ((,) i) (initServerCharacter True)) npcIds
      return ServerWorld { .. }
 
 startingMode :: Handles -> Float -> Float -> ServerWorld -> IO ServerWorld
@@ -153,17 +169,17 @@ updateServerWorld hs t w =
     Stopped -> return w
     Starting duration -> startingMode hs t duration w
     Playing ->
-     do pcs'  <- mapM (playerLogic    hs t     ) $ serverPlayers w
-        npcs' <- mapM (characterLogic hs t True) $ serverNpcs w
+     do pcs'  <- mapWithKeyA (playerLogic hs t) $ serverPlayers w
+        npcs' <- mapWithKeyA (characterLogic hs t True) $ serverNpcs w
 
-        let winners = filter isWinner pcs'
+        let winners = IntMap.filter isWinner pcs'
 
-        pcs2 <- if null winners
+        pcs2 <- if IntMap.null winners
                 then return pcs'
                 else endGame hs winners pcs' "deception"
 
         let mode'
-              | null winners       = Playing
+              | IntMap.null winners = Playing
               | otherwise          = Stopped
 
         return w { serverPlayers = pcs2
@@ -171,20 +187,22 @@ updateServerWorld hs t w =
                  , serverMode    = mode'
                  }
 
-endGame :: Handles -> [Player] -> [Player] -> String -> IO [Player]
+endGame :: Handles -> IntMap Player -> IntMap Player -> String ->
+  IO (IntMap Player)
 endGame hs winners players reason =
 
   do -- Declare victory
      announce hs $ ServerMessage
-       $ commas (map playerUsername winners) ++ " wins by " ++ reason ++ "!"
+       $ commas (map playerUsername (IntMap.elems winners))
+          ++ " wins by " ++ reason ++ "!"
 
      -- Update scores
-     let players' = map (addVictory winners) players
+     let players' = IntMap.mapWithKey (addVictory (IntMap.keys winners)) players
 
      -- Announce scores
      announce hs
        $ ServerMessage $ commas $ map prettyScore
-       $ reverse $ sortBy (comparing playerScore) players'
+       $ reverse $ sortBy (comparing playerScore) $ IntMap.elems players'
 
      return players'
 
@@ -194,18 +212,14 @@ prettyScore p = playerUsername p ++ ": " ++ show (playerScore p)
 commas :: [String] -> String
 commas = intercalate ", "
 
-addVictory :: [Player] -> Player -> Player
-addVictory winners p
-  | playerName p `elem` map playerName winners =
-                                p { playerScore = 1 + playerScore p }
+addVictory :: [Int] -> Int -> Player -> Player
+addVictory winners name p
+  | name `elem` winners = p { playerScore = 1 + playerScore p }
   | otherwise = p
 
-playerName :: Player -> Int
-playerName = charName . playerCharacter
-
-playerLogic :: Handles -> Float -> Player -> IO Player
-playerLogic hs t p =
-  do char <- characterLogic hs t False $ playerCharacter p
+playerLogic :: Handles -> Float -> Int -> Player -> IO Player
+playerLogic hs t name p =
+  do char <- characterLogic hs t False name $ playerCharacter p
      let p' = p { playerCharacter = char }
      case whichPillar (charPos char) of
        Just i | i `notElem` playerVisited p ->
@@ -213,8 +227,8 @@ playerLogic hs t p =
             return p' { playerVisited = i : playerVisited p' }
        _ -> return p'
 
-characterLogic :: Handles -> Float -> Bool -> Character -> IO Character
-characterLogic hs t think char =
+characterLogic :: Handles -> Float -> Bool -> Int -> Character -> IO Character
+characterLogic hs t think charName char =
   do let (char',_,mbTask) = stepCharacter t char
 
      case guard think >> mbTask of
@@ -225,7 +239,7 @@ characterLogic hs t think char =
 
        Just ChooseDestination ->
          do tgt <- randomBoardPoint
-            announce hs $ ServerCommand (charName char')
+            announce hs $ ServerCommand charName
                         $ Move (charPos char) tgt
             return $ walkingCharacter tgt char'
 
@@ -239,13 +253,6 @@ constrainPoint from
   . aux intersectSegHorzLine (snd boardMax)
   where
   aux f x p = fromMaybe p (f from p x)
-
-extractPlayer :: Int -> [Player] -> Maybe (Player, [Player])
-extractPlayer _ [] = Nothing
-extractPlayer i (p:ps)
-  | charName (playerCharacter p) == i = return (p,ps)
-  | otherwise = do (x,xs) <- extractPlayer i ps
-                   return (x,p:xs)
 
 connect :: Handles -> ConnectionId -> ServerWorld -> IO ServerWorld
 connect hs i w =
@@ -269,14 +276,15 @@ command env hs (ConnectionId i) msg w
 disconnect :: Handles -> ConnectionId -> ServerWorld -> IO ServerWorld
 disconnect hs (ConnectionId i) w =
   do putStrLn $ "Client disconnect with id " ++ show i
-     case extractPlayer i $ serverPlayers w of
-       Just (p,ps) ->
-         do announce hs $ ServerCommand i Die
+     case IntMap.lookup i $ serverPlayers w of
+       Just p ->
+         do let ps = IntMap.delete i $ serverPlayers w
+            announce hs $ ServerCommand i Die
             announce hs $ ServerMessage $ playerUsername p ++ " disconnected"
 
-            when (null ps) $ announce hs $ ServerMessage "Game Over"
+            when (IntMap.null ps) $ announce hs $ ServerMessage "Game Over"
 
-            let mode | null ps        = Stopped
+            let mode | IntMap.null ps = Stopped
                      | otherwise      = serverMode w
 
             return w { serverPlayers = ps
@@ -293,9 +301,9 @@ disconnect hs (ConnectionId i) w =
 
 addClient :: Handles -> Int -> String -> ServerWorld -> IO ServerWorld
 addClient hs i name w =
-  do forM_ (serverLobby w) $ \(_,u) ->
+  do for_ (serverLobby w) $ \(_,u) ->
          announceOne hs (ConnectionId i) $ ServerMessage $ u ++ " in lobby"
-     forM_ (serverPlayers w) $ \p ->
+     for_ (serverPlayers w) $ \p ->
          announceOne hs (ConnectionId i) $ ServerMessage $ playerUsername p ++ " in game"
      announce hs $ ServerMessage $ name ++ " joined lobby"
      return $ w { serverLobby = (i,name) : serverLobby w }
@@ -303,19 +311,21 @@ addClient hs i name w =
 
 performAttack :: Handles -> Int -> ServerWorld -> IO ServerWorld
 performAttack hs attackId w =
-  do let Just (attacker, them) = extractPlayer attackId $ serverPlayers w
+  do let Just attacker = IntMap.lookup attackId $ serverPlayers w
+         them = IntMap.delete attackId $ serverPlayers w
      let attackChar = playerCharacter attacker
 
-     announce hs $ ServerCommand (charName attackChar) Attack
+     announce hs $ ServerCommand attackId Attack
 
-     let me' =  mapPlayerCharacter attackingCharacter attacker
-     them' <- mapM (attackPlayer hs attacker) them
-     npcs' <- mapM (attackCharacter hs attackChar) (serverNpcs w)
+     let me' = mapPlayerCharacter attackingCharacter attacker
+     them' <- mapWithKeyA (attackPlayer hs attacker) them
+     npcs' <- mapWithKeyA (attackCharacter hs attackChar) (serverNpcs w)
 
-     let winningAttack = all isDeadPlayer them'
+     let winningAttack = all isDeadPlayer $ IntMap.elems them'
      everyone <- if winningAttack
-                   then endGame hs [me'] (me' : them') "force"
-                   else return $ me' : them'
+                   then endGame hs (IntMap.singleton attackId me')
+                                   (IntMap.insert attackId me' them') "force"
+                   else return $ IntMap.insert attackId me' them'
 
      let mode
            | winningAttack = Stopped
@@ -326,25 +336,28 @@ performAttack hs attackId w =
                 , serverMode    = mode
                 }
 
-attackCharacter :: Handles -> Character -> Character -> IO Character
-attackCharacter hs attacker target
+attackCharacter :: Handles -> Character -> Int -> Character -> IO Character
+attackCharacter hs attacker targetId target
   | canHitPoint attacker (charPos target) =
-     do announce hs $ ServerCommand (charName target) Stun
+     do announce hs $ ServerCommand targetId Stun
         return $ stunnedCharacter target
   | otherwise = return target
 
-attackPlayer :: Handles -> Player -> Player -> IO Player
-attackPlayer hs attacker target
+attackPlayer :: Handles -> Player -> Int -> Player -> IO Player
+attackPlayer hs attacker charName target
   | canHitPoint attackerChar (charPos targetChar) =
      do let attackerName = playerUsername attacker
-        announce hs $ ServerCommand (charName targetChar) Die
-        announceOne hs (ConnectionId (charName targetChar))
+        announce hs $ ServerCommand charName Die
+        announceOne hs (ConnectionId charName)
           $ ServerMessage $ "Killed by " ++ attackerName
         return $ mapPlayerCharacter deadCharacter target
   | otherwise = return target
   where
   targetChar = playerCharacter target
   attackerChar = playerCharacter attacker
+
+mapWithKeyA :: Applicative f => (Int -> a -> f b) -> IntMap a -> f (IntMap b)
+mapWithKeyA f m = sequenceA $ IntMap.mapWithKey f m
 
 -----------------------------------------------------------------------
 -- Player predicates

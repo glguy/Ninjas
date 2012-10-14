@@ -26,12 +26,14 @@ executable Ninjas
                        Server,
                        Simulation
   hs-source-dirs:      src
-  build-depends:       base,
+  build-depends:
+                       base,
                        binary,
                        bytestring,
+                       containers,
+                       filepath,
                        gloss,
                        network,
-                       random,
-                       filepath,
-                       networked-game
+                       networked-game,
+                       random
   ghc-options:         -Wall

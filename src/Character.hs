@@ -8,8 +8,7 @@ import VectorUtils
 import Parameters
 
 data Character = Character
-  { charName   :: Int
-  , charPos    :: Point
+  { charPos    :: Point
   , charFacing :: Vector -- Unit vector
   , charState  :: State
   }

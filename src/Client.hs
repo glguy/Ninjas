@@ -10,6 +10,8 @@ import System.IO
 import Network
 import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
+import qualified Data.IntMap as IntMap
+import Data.IntMap (IntMap)
 
 import Character
 import Parameters
@@ -81,7 +83,8 @@ getInitialWorld h =
 
 initClientWorld :: Anim.World -> [(Int, Point, Vector)] -> World
 initClientWorld anim poss =
-  World { worldCharacters = [initClientCharacter (Anim.npc anim) i p v
+  World { worldCharacters = IntMap.fromList
+                            [(i,initClientCharacter (Anim.npc anim) p v)
                                 | (i,p,v) <- poss ]
         , dingTimers    = []
         , worldMessages = []
@@ -108,7 +111,7 @@ drawWorld w     = pictures
                 $ borderPicture
                 : dingPicture (length (dingTimers w))
                 : map (drawPillar w) pillars
-               ++ map drawCharacter (worldCharacters w)
+               ++ map drawCharacter (IntMap.elems $ worldCharacters w)
                ++ map drawSmoke (smokeTimers w)
                ++ messagePictures (worldMessages w)
 
@@ -177,7 +180,7 @@ clearMessages var = modifyMVar_ var $ \w -> return $ w { worldMessages = [] }
 
 updateClientWorld :: Float -> World -> World
 updateClientWorld d w =
-  w { worldCharacters = map (stepClientCharacter npcLooks d) (worldCharacters w)
+  w { worldCharacters = fmap (stepClientCharacter npcLooks d) (worldCharacters w)
     , dingTimers  = [ t - d      |  t     <- dingTimers  w, t > d]
     , smokeTimers = [(pt, Anim.update d a) |
                             (pt,a) <- smokeTimers w, not (Anim.finished d a) ]
@@ -232,14 +235,14 @@ clientUpdates h var = forever $
          Die            -> deadCharacter npc
          Attack         -> attackingCharacter npc
 
-updateNpcList :: Int -> (ClientCharacter -> ClientCharacter) -> [ClientCharacter] -> [ClientCharacter]
-updateNpcList _ _ [] = []
-updateNpcList i f (n:ns)
-  | charName (clientCharacter n) == i = f n : ns
-  | otherwise      = n : updateNpcList i f ns
+updateNpcList ::
+  Int ->
+  (ClientCharacter -> ClientCharacter) ->
+  IntMap ClientCharacter -> IntMap ClientCharacter
+updateNpcList i f = IntMap.update (Just . f) i
 
 data World = World
-  { worldCharacters  :: [ClientCharacter]
+  { worldCharacters  :: IntMap ClientCharacter
   , dingTimers       :: [Float]
   , smokeTimers      :: [(Point, Anim.Animation)]
   , worldMessages    :: [String]
@@ -250,8 +253,8 @@ data World = World
 -- and a facing unit vector. This function is used
 -- by clients who are told the parameters by the
 -- server.
-initClientCharacter :: Anim.NPC -> Int -> Point -> Vector -> ClientCharacter
-initClientCharacter anim charName charPos charFacing =
+initClientCharacter :: Anim.NPC -> Point -> Vector -> ClientCharacter
+initClientCharacter anim charPos charFacing =
   let charState = Waiting Wait { waitWaiting = Nothing, waitStunned = False }
       clientAnim = Anim.stay anim
       clientCharacter = Character { .. }
