@@ -20,7 +20,10 @@ data Animation = Animation
   }
 
 loop :: Animation -> Animation
-loop a = a { moreFrames = cycle (moreFrames a) }
+loop a = a { moreFrames = cycle' (moreFrames a) }
+  where
+  cycle' [] = error "Animations files missing, try 'cabal install'"
+  cycle' xs = cycle xs
 
 once :: Float -> [Picture] -> Animation
 once frameDelay moreFrames = Animation { .. }
