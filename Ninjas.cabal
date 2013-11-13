@@ -24,7 +24,8 @@ executable Ninjas
                        NetworkMessages,
                        Parameters,
                        Server,
-                       Simulation
+                       Simulation,
+                       VectorUtils
   hs-source-dirs:      src
   build-depends:
                        base,
