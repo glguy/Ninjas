@@ -2,10 +2,10 @@
 module Anim where
 
 import Graphics.Gloss.Data.Picture
+import Graphics.Gloss.Data.Bitmap (loadBMP)
 import System.FilePath
 import Control.Exception
-import Paths_Ninjas
-import Prelude hiding(catch)
+import Prelude
 
 
 defaultFrameDelay :: Float
@@ -52,7 +52,7 @@ update elapsed a
 --------------------------------------------------------------------------------
 
 loadImg :: FilePath -> IO Picture
-loadImg x = loadBMP =<< getDataFileName ("images" </> x <.> "bmp")
+loadImg x = loadBMP ("images" </> x <.> "bmp")
 
 loadFrames :: FilePath -> IO [Picture]
 loadFrames path = load (1::Int)
