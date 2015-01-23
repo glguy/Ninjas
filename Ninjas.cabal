@@ -25,7 +25,8 @@ executable Ninjas
                        Parameters,
                        Server,
                        Simulation,
-                       VectorUtils
+                       VectorUtils,
+                       Bot
   hs-source-dirs:      src
   build-depends:
                        base,
@@ -36,5 +37,37 @@ executable Ninjas
                        gloss,
                        network,
                        networked-game,
-                       random
+                       random,
+                       hint,
+                       stm-chans, stm,
+                       time
   ghc-options:         -Wall
+
+Library
+  other-modules:
+                       Anim,
+                       Client,
+                       Character,
+                       NetworkMessages,
+                       Parameters,
+                       Server,
+                       Simulation,
+                       Paths_Ninjas
+  hs-source-dirs:      src
+  build-depends:
+                       base,
+                       binary,
+                       bytestring,
+                       containers,
+                       filepath,
+                       gloss,
+                       network,
+                       networked-game,
+                       random,
+                       hint,
+                       stm-chans, stm,
+                       time
+  ghc-options:         -Wall
+  exposed-modules:     Ninja,
+                       Ninja.WhiteBelt,
+                       Bot
