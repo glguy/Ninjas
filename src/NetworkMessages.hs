@@ -1,7 +1,9 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 module NetworkMessages where
 
 import Control.Monad
 import Data.Binary (Binary(get,put),getWord8,putWord8, Get,Put)
+import Data.Data
 import Graphics.Gloss.Data.Picture
 import Network (PortID(PortNumber))
 import System.IO (Handle)
@@ -17,14 +19,14 @@ data Command
   | Attack
   | Stun
   | Die
-  deriving (Show, Read, Eq)
+  deriving (Show, Read, Eq, Data, Typeable)
 
 data ClientCommand
   = ClientCommand Command
   | ClientSmoke
   | ClientJoin String
   | NewGame
-  deriving (Show, Read, Eq)
+  deriving (Show, Read, Eq, Data, Typeable)
 
 data ServerCommand
   = ServerCommand Int Command
@@ -34,7 +36,7 @@ data ServerCommand
   | ServerSmoke Point
   | ServerDing
   | ServerReady
-  deriving (Show, Read)
+  deriving (Show, Read, Data, Typeable)
 
 hGetClientCommand :: Handle -> IO ClientCommand
 hGetClientCommand = hGetPacketed
