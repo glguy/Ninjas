@@ -6,6 +6,7 @@ import Control.Monad
 import Graphics.Gloss.Interface.IO.Game
 import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
+import System.Exit
 import System.IO
 import Network
 import Server (ServerEnv(..), defaultServerEnv)
@@ -19,13 +20,14 @@ import VectorUtils
 import qualified Anim
 
 moveButton, stopButton, attackButton, smokeButton,
-  newGameButton, clearButton :: Key
+  newGameButton, clearButton, quitButton :: Key
 moveButton    = MouseButton LeftButton
 stopButton    = MouseButton RightButton
 attackButton  = Char 'a'
 smokeButton   = Char 's'
 newGameButton = Char 'n'
 clearButton   = Char 'c'
+quitButton    = SpecialKey KeyEsc
 
 windowPadding :: Int
 windowPadding = 60
@@ -173,6 +175,7 @@ inputEvent h var (EventKey k Down _ pos) ()
   | k == smokeButton  = hPutClientCommand h (ClientSmoke             )
   | k == newGameButton = hPutClientCommand h NewGame
   | k == clearButton  = clearMessages var
+  | k == quitButton   = exitSuccess
 inputEvent _ _ _ () = return ()
 
 clearMessages :: MVar World -> IO ()

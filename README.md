@@ -20,6 +20,8 @@ Controls
 * **A** - Attack
 * **S** - Smoke bomb
 * **N** - New game
+* **C** - Clear messages
+* **ESC** - Quit game
 * **Left Click** - Move to clicked location
 * **Right Click** - Stop moving immediately
 
