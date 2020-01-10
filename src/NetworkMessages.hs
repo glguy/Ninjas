@@ -5,13 +5,13 @@ import Control.Monad
 import Data.Binary (Binary(get,put),getWord8,putWord8, Get,Put)
 import Data.Data
 import Graphics.Gloss.Data.Picture
-import Network (PortID(PortNumber))
+import Network.Socket (PortNumber)
 import System.IO (Handle)
 
 import NetworkedGame.Packet
 
-gamePort :: PortID
-gamePort = PortNumber 16000
+gamePort :: PortNumber
+gamePort = 16000
 
 data Command
   = Move Point Point

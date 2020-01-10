@@ -24,7 +24,7 @@ import Graphics.Gloss.Interface.IO.Game
 import Graphics.Gloss.Data.Vector
 import Graphics.Gloss.Geometry.Angle
 import System.IO
-import Network
+import Network.Socket
 import Server (ServerEnv(..), defaultServerEnv)
 import NetworkMessages
 import qualified Data.IntMap as IntMap
@@ -82,7 +82,16 @@ defaultBot = BotNoop
 botMain :: BotEnv -> IO ()
 botMain (BotEnv host port botname bot runDisplay) =
   do anim <- Anim.loadWorld
-     h <- connectTo host (PortNumber (fromIntegral port))
+
+     ai:_ <- getAddrInfo
+                (Just defaultHints { addrSocketType = Stream,
+                                     addrFlags = [AI_ADDRCONFIG] })
+                (Just host)
+                (Just (show port))
+     sock <- socket (addrFamily ai) (addrSocketType ai) (addrProtocol ai)
+     connect sock (addrAddress ai)
+     h <- socketToHandle sock ReadWriteMode
+
      hSetBuffering h NoBuffering
 
      cmdChan <- C.newTBChanIO 100

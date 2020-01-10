@@ -52,6 +52,7 @@ Library
                        Parameters,
                        Server,
                        Simulation,
+                       VectorUtils,
                        Paths_Ninjas
   hs-source-dirs:      src
   build-depends:

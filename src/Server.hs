@@ -11,7 +11,6 @@ import Data.Ord (comparing)
 import Data.Traversable (sequenceA)
 import Graphics.Gloss.Data.Point
 import Graphics.Gloss.Geometry.Line
-import Network (PortID(..))
 import qualified Data.IntMap as IntMap
 
 import Simulation
@@ -49,7 +48,7 @@ serverMain env =
   do w                  <- initServerWorld env []
      let ServerEnv { serverPort = port } = env
      let settings = NetworkServer
-           { serverPort = PortNumber $ fromIntegral port
+           { serverPort = fromIntegral port
            , eventsPerSecond = Parameters.eventsPerSecond
            , onTick     = updateServerWorld
            , onConnect  = connect
@@ -160,8 +159,8 @@ startingMode hs t duration w =
                 else return $ Starting duration'
      return $ w { serverMode = mode' }
   where
-  duration'	= duration + t
-  boundary x 	= duration < x && x <= duration'
+  duration'     = duration + t
+  boundary x    = duration < x && x <= duration'
 
 updateServerWorld    :: Handles -> Float -> ServerWorld -> IO ServerWorld
 updateServerWorld hs t w =
